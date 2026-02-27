@@ -1,0 +1,50 @@
+# LTX-2 Native Video Generation Server Configuration
+
+server:
+  host: "0.0.0.0"
+  port: 8006
+
+model:
+  # Directory containing model weights
+  # Expected layout (auto-downloaded by download_models.py):
+  #   ltx-2-19b-distilled-fp8.safetensors                   (27.1 GB)
+  #   ltx-2-spatial-upscaler-x2-1.0.safetensors             (996 MB)
+  #   gemma-3-12b/text_encoder/model-*.safetensors           (~49 GB, fp32 fallback)
+  #   gemma-3-12b/tokenizer/tokenizer.model                  (~39 MB)
+  #   gemma-3-12b-fp8/gemma_3_12B_it_fp8_e4m3fn.safetensors (13.2 GB, preferred)
+  model_dir: "../models/ltx-2"
+
+  # Checkpoint filename (inside model_dir)
+  checkpoint: "ltx-2-19b-distilled-fp8.safetensors"
+
+  # Spatial upsampler filename (inside model_dir)
+  spatial_upsampler: "ltx-2-spatial-upscaler-x2-1.0.safetensors"
+
+  # Gemma text encoder subdirectory name (inside model_dir)
+  # Contains text_encoder/ (model weights) and tokenizer/ (tokenizer.model, preprocessor_config.json)
+  # The FP8 quantized version (gemma-3-12b-fp8/) is used automatically if present.
+  gemma_dir: "gemma-3-12b"
+
+  # CUDA device index (default: 0, override to use a different GPU)
+  # 0 = first GPU, 1 = second GPU, etc.
+  cuda_device: "0"
+
+# Memory management
+memory:
+  # Unload model after this many seconds of inactivity (0 = never unload)
+  # Frees GPU VRAM for Z-Image, ACE-Step, Qwen3-TTS, or other tasks
+  idle_timeout: 300
+
+# Output file settings
+output:
+  directory: output
+  prefix: LTX2_
+  digits: 5
+  extension: mp4
+
+# Default generation parameters (matching verified RTX 3090 workflow)
+defaults:
+  width: 768
+  height: 512
+  num_frames: 241       # ~10s at 24fps. Must be (N*8)+1
+  fps: 24

@@ -1,0 +1,16 @@
+{
+  "name": "boltz-claim-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Boltz Taproot Musig2 claim transaction scripts for cold storage",
+  "scripts": {
+    "claim": "node boltz_claim.js"
+  },
+  "dependencies": {
+    "boltz-core": "^3.1.2",
+    "ecpair": "^2.1.0",
+    "tiny-secp256k1": "^2.2.3",
+    "bitcoinjs-lib": "^6.1.6",
+    "socks-proxy-agent": "^8.0.4"
+  }
+}

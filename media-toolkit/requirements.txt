@@ -1,0 +1,18 @@
+# Media Toolkit Server Dependencies
+# FFmpeg-based media composition, splitting, and mixing
+# CPU-only — no GPU, no heavy ML libraries
+
+# Web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# HTTP client (for URL-based file fetching from other services)
+httpx>=0.25.0
+
+# Config
+pyyaml>=6.0
+pydantic>=2.0
+
+# FFmpeg Python wrapper
+ffmpeg-python>=0.2.0

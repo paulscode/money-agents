@@ -1,0 +1,51 @@
+# Backend Docker ignore file
+# Excludes development/test files from the Docker build context
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Test files
+tests/
+pytest.ini
+.pytest_cache/
+
+# Development scripts
+dev.sh
+seed_learning_data.py
+reset_password.py
+test_campaign_worker.py
+init_tools_catalog.py
+
+# Documentation
+IMPLEMENTATION_SUMMARY.md
+INIT_TOOLS_README.md
+README.md
+
+# Alembic (migrations run separately)
+# alembic/ -- keep this; migrations are needed
+
+# Uploads (mounted as volume)
+uploads/
+
+# Coverage reports
+.coverage
+htmlcov/
+coverage.xml
+
+# Type checking
+.mypy_cache/
+
+# IDE
+.vscode/
+.idea/

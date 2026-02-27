@@ -1,0 +1,44 @@
+# docker-compose.override.yml.example
+# 
+# Copy this file to docker-compose.override.yml to add local customizations.
+# Docker Compose automatically merges this with docker-compose.yml.
+# The override file is gitignored, so your local mounts won't be committed.
+#
+# NOTE: start.py auto-generates this file with GPU config during setup.
+# You can also manually copy/edit this example.
+#
+# Usage:
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   # Edit the file with your storage paths and GPU settings
+#   docker compose up -d
+
+services:
+  backend:
+    # --- GPU Support (NVIDIA) ---
+    # Uncomment the deploy block to enable NVIDIA GPU passthrough.
+    # Requires:
+    #   Linux: NVIDIA Container Toolkit (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
+    #   Windows: Docker Desktop with WSL 2 backend + NVIDIA GPU driver
+    #   macOS: Not available (GPU work runs on host via Ollama/ACE-Step/ComfyUI)
+    #
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    
+    volumes:
+      # --- Storage Volumes ---
+      # Add your storage volumes here. The path on the left is the host path,
+      # the path on the right is where it will appear inside the container.
+      # Use the container path (right side) when creating Storage Resources in the UI.
+      #
+      # Examples:
+      # Linux:   /mnt/storage:/mnt/storage:rw
+      # macOS:   /Volumes/MyDrive:/mnt/MyDrive:rw
+      # Windows: //c/Users/user/data:/mnt/data:rw  (use forward slashes)
+      
+      # Uncomment and modify these lines for your storage:
+      # - /mnt/storage:/mnt/storage:rw

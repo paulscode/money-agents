@@ -1,0 +1,93 @@
+# ---------------------------------------------------------------------------
+# nginx configuration for Money Agents frontend (production)
+#
+# SGA3-M5: CSP origins are templated via envsubst at container startup.
+# Environment variables:
+#   CSP_CONNECT_ORIGINS - space-separated origins for connect-src
+#                         (default: 'self')
+#   CSP_IMG_ORIGINS     - space-separated origins for img-src
+#                         (default: 'self' data: blob:)
+#   CSP_MEDIA_ORIGINS   - space-separated origins for media-src
+#                         (default: 'self' blob:)
+#
+# For local development, the docker-compose.yml sets:
+#   CSP_CONNECT_ORIGINS="'self' http://localhost:* ws://localhost:* wss://localhost:* https://api.coingecko.com"
+#
+# For production with a reverse proxy at https://app.example.com:
+#   CSP_CONNECT_ORIGINS="'self' https://app.example.com wss://app.example.com https://api.coingecko.com"
+# ---------------------------------------------------------------------------
+
+server {
+    listen       80;
+    server_name  _;
+
+    # SGA3-L7: Hide nginx version from response headers
+    server_tokens off;
+
+    root   /usr/share/nginx/html;
+    index  index.html;
+
+    # ---- Security headers ----
+    add_header Content-Security-Policy
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src ${CSP_IMG_ORIGINS}; "
+        "font-src 'self' data:; "
+        "connect-src ${CSP_CONNECT_ORIGINS}; "
+        "media-src ${CSP_MEDIA_ORIGINS}; "
+        "object-src 'none'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self';"
+        always;
+
+    add_header X-Content-Type-Options  "nosniff"       always;
+    add_header X-Frame-Options         "DENY"          always;
+    add_header Referrer-Policy         "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy      "camera=(), microphone=(), geolocation=()" always;
+
+    # HSTS — only enable once you have a valid TLS termination in front
+    # add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+
+    # ---- Gzip ----
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml;
+    gzip_min_length 256;
+
+    # ---- Hashed assets — immutable long cache ----
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable" always;
+        # Re-declare security headers (nginx drops parent add_header in child blocks)
+        # SGA3-L8: Include CSP to prevent header loss in child location blocks
+        add_header Content-Security-Policy
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src ${CSP_IMG_ORIGINS}; "
+            "font-src 'self' data:; "
+            "connect-src ${CSP_CONNECT_ORIGINS}; "
+            "media-src ${CSP_MEDIA_ORIGINS}; "
+            "object-src 'none'; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self';"
+            always;
+        add_header X-Content-Type-Options  "nosniff"       always;
+        add_header X-Frame-Options         "DENY"          always;
+        add_header Referrer-Policy         "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy      "camera=(), microphone=(), geolocation=()" always;
+    }
+
+    # ---- SPA fallback ----
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # ---- Block dot-files ----
+    location ~ /\. {
+        deny all;
+        return 404;
+    }
+}

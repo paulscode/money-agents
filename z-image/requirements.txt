@@ -1,0 +1,16 @@
+# Z-Image Standalone Server Dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+httpx>=0.25.0
+pyyaml>=6.0
+pydantic>=2.0
+pillow>=10.0
+loguru>=0.7.0
+
+# Z-Image native inference (installed via pip install -e ./Z-Image)
+# These are Z-Image's own dependencies:
+torch>=2.5.0
+transformers>=4.51.0
+safetensors
+accelerate
+huggingface_hub>=0.25.0

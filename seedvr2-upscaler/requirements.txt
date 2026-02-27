@@ -1,0 +1,19 @@
+# SeedVR2 Upscaler Standalone Server Dependencies
+# Server framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+httpx>=0.25.0
+pyyaml>=6.0
+pydantic>=2.0
+python-multipart>=0.0.6
+
+# Image/Video processing
+pillow>=10.0
+numpy>=1.24.0
+
+# PyTorch + CUDA (installed via SeedVR2 requirements.txt)
+# torch>=2.0.0
+# torchvision>=0.15.0
+
+# SeedVR2 dependencies are installed from seedvr2/requirements.txt
+# Key deps: omegaconf, safetensors, huggingface_hub, einops, diffusers

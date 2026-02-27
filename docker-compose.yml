@@ -1,0 +1,662 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: money-agents-postgres
+    environment:
+      POSTGRES_USER: money_agents
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: money_agents
+    command: postgres -c max_connections=200
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U money_agents"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend-net
+    # RT-16: Resource limits
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 256
+
+  # Redis Cache & Message Queue
+  redis:
+    image: redis:7-alpine
+    container_name: money-agents-redis
+    command: >-
+      redis-server
+      --requirepass ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      --rename-command CONFIG ""
+      --rename-command DEBUG ""
+      --rename-command FLUSHALL ""
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      # RT-20: Use REDISCLI_AUTH env var instead of -a flag to avoid password in ps output
+      test: ["CMD-SHELL", "REDISCLI_AUTH=${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env} redis-cli ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - backend-net
+    # RT-16: Resource limits
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: money-agents-backend
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://money_agents:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/money_agents
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/2
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - HOST_OS=${HOST_OS:-linux}
+      - ENABLE_DOCS=${ENABLE_DOCS:-false}
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+      # LLM API Keys (loaded from .env)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - Z_AI_API_KEY=${Z_AI_API_KEY:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+      - SERPER_API_KEY=${SERPER_API_KEY:-}
+      # Serper Clone (self-hosted search)
+      - USE_SERPER_CLONE=${USE_SERPER_CLONE:-false}
+      - SERPER_CLONE_URL=${SERPER_CLONE_URL:-}
+      # LLM Provider Priority
+      - LLM_PROVIDER_PRIORITY=${LLM_PROVIDER_PRIORITY:-glm,claude,openai,ollama}
+      # Ollama (Local LLM) Configuration
+      - USE_OLLAMA=${USE_OLLAMA:-false}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL_TIERS=${OLLAMA_MODEL_TIERS:-hf.co/mradermacher/Nanbeige4.1-3B-GGUF:Q8_0,mistral-nemo:12b,glm-4.7-flash:latest}
+      - OLLAMA_CONTEXT_LENGTHS=${OLLAMA_CONTEXT_LENGTHS:-262144,65536,8192}
+      - OLLAMA_MAX_CONCURRENT=${OLLAMA_MAX_CONCURRENT:-1}
+      # ACE-Step (Local Music Generation) Configuration
+      - USE_ACESTEP=${USE_ACESTEP:-false}
+      - ACESTEP_API_URL=${ACESTEP_API_URL:-http://host.docker.internal:8001}
+      - ACESTEP_API_PORT=${ACESTEP_API_PORT:-8001}
+      - ACESTEP_MODEL=${ACESTEP_MODEL:-base}
+      - ACESTEP_AUTO_START=${ACESTEP_AUTO_START:-false}
+      - ACESTEP_DOWNLOAD_SOURCE=${ACESTEP_DOWNLOAD_SOURCE:-auto}
+      # Qwen3-TTS (Local Voice Generation) Configuration
+      - USE_QWEN3_TTS=${USE_QWEN3_TTS:-false}
+      - QWEN3_TTS_API_URL=${QWEN3_TTS_API_URL:-http://host.docker.internal:8002}
+      - QWEN3_TTS_API_PORT=${QWEN3_TTS_API_PORT:-8002}
+      - QWEN3_TTS_TIER=${QWEN3_TTS_TIER:-auto}
+      - QWEN3_TTS_AUTO_START=${QWEN3_TTS_AUTO_START:-true}
+      - QWEN3_TTS_IDLE_TIMEOUT=${QWEN3_TTS_IDLE_TIMEOUT:-300}
+      # Z-Image (Local Image Generation) Configuration
+      - USE_ZIMAGE=${USE_ZIMAGE:-false}
+      - ZIMAGE_API_URL=${ZIMAGE_API_URL:-http://host.docker.internal:8003}
+      - ZIMAGE_API_PORT=${ZIMAGE_API_PORT:-8003}
+      - ZIMAGE_MODEL=${ZIMAGE_MODEL:-turbo}
+      - ZIMAGE_AUTO_START=${ZIMAGE_AUTO_START:-true}
+      - ZIMAGE_IDLE_TIMEOUT=${ZIMAGE_IDLE_TIMEOUT:-300}
+      # SeedVR2 (Local Image & Video Upscaler) Configuration
+      - USE_SEEDVR2=${USE_SEEDVR2:-false}
+      - SEEDVR2_API_URL=${SEEDVR2_API_URL:-http://host.docker.internal:8004}
+      - SEEDVR2_API_PORT=${SEEDVR2_API_PORT:-8004}
+      - SEEDVR2_MODEL=${SEEDVR2_MODEL:-seedvr2_ema_3b_fp8_e4m3fn.safetensors}
+      - SEEDVR2_AUTO_START=${SEEDVR2_AUTO_START:-true}
+      - SEEDVR2_IDLE_TIMEOUT=${SEEDVR2_IDLE_TIMEOUT:-300}
+      # Canary-STT (Local Speech-to-Text) Configuration
+      - USE_CANARY_STT=${USE_CANARY_STT:-false}
+      - CANARY_STT_API_URL=${CANARY_STT_API_URL:-http://host.docker.internal:8005}
+      - CANARY_STT_API_PORT=${CANARY_STT_API_PORT:-8005}
+      - CANARY_STT_AUTO_START=${CANARY_STT_AUTO_START:-true}
+      - CANARY_STT_IDLE_TIMEOUT=${CANARY_STT_IDLE_TIMEOUT:-300}
+      # AudioSR (Local Audio Super-Resolution) Configuration
+      - USE_AUDIOSR=${USE_AUDIOSR:-false}
+      - AUDIOSR_API_URL=${AUDIOSR_API_URL:-http://host.docker.internal:8007}
+      - AUDIOSR_API_PORT=${AUDIOSR_API_PORT:-8007}
+      - AUDIOSR_MODEL=${AUDIOSR_MODEL:-basic}
+      - AUDIOSR_AUTO_START=${AUDIOSR_AUTO_START:-true}
+      - AUDIOSR_IDLE_TIMEOUT=${AUDIOSR_IDLE_TIMEOUT:-300}
+      - GPU_AUDIOSR=${GPU_AUDIOSR:-0}
+      # Media Toolkit (FFmpeg-based media composition) Configuration
+      - USE_MEDIA_TOOLKIT=${USE_MEDIA_TOOLKIT:-false}
+      - MEDIA_TOOLKIT_API_URL=${MEDIA_TOOLKIT_API_URL:-http://host.docker.internal:8008}
+      - MEDIA_TOOLKIT_API_PORT=${MEDIA_TOOLKIT_API_PORT:-8008}
+      - MEDIA_TOOLKIT_AUTO_START=${MEDIA_TOOLKIT_AUTO_START:-true}
+      # Real-ESRGAN CPU (CPU-only image & video upscaling) Configuration
+      - USE_REALESRGAN_CPU=${USE_REALESRGAN_CPU:-false}
+      - REALESRGAN_CPU_API_URL=${REALESRGAN_CPU_API_URL:-http://host.docker.internal:8009}
+      - REALESRGAN_CPU_API_PORT=${REALESRGAN_CPU_API_PORT:-8009}
+      - REALESRGAN_CPU_MODEL=${REALESRGAN_CPU_MODEL:-realesr-animevideov3}
+      - REALESRGAN_CPU_AUTO_START=${REALESRGAN_CPU_AUTO_START:-true}
+      # Docling Document Parser (CPU-only document parsing) Configuration
+      - USE_DOCLING=${USE_DOCLING:-false}
+      - DOCLING_API_URL=${DOCLING_API_URL:-http://host.docker.internal:8010}
+      - DOCLING_API_PORT=${DOCLING_API_PORT:-8010}
+      - DOCLING_AUTO_START=${DOCLING_AUTO_START:-true}
+      # LTX-2 Video (Local Text-to-Video Generation) Configuration
+      - USE_LTX_VIDEO=${USE_LTX_VIDEO:-false}
+      - LTX_VIDEO_API_URL=${LTX_VIDEO_API_URL:-http://host.docker.internal:8006}
+      - LTX_VIDEO_API_PORT=${LTX_VIDEO_API_PORT:-8006}
+      - LTX_VIDEO_AUTO_START=${LTX_VIDEO_AUTO_START:-true}
+      - LTX_VIDEO_IDLE_TIMEOUT=${LTX_VIDEO_IDLE_TIMEOUT:-300}
+      - LTX_VIDEO_MODEL_DIR=${LTX_VIDEO_MODEL_DIR:-models/ltx-2}
+      - GPU_LTX_VIDEO=${GPU_LTX_VIDEO:-0}
+      # Bitcoin / LND Lightning Node
+      - USE_LND=${USE_LND:-false}
+      - LND_REST_URL=${LND_REST_URL:-https://host.docker.internal:8080}
+      - LND_MACAROON_HEX=${LND_MACAROON_HEX:-}
+      - LND_TLS_VERIFY=${LND_TLS_VERIFY:-true}
+      - LND_TLS_CERT=${LND_TLS_CERT:-}
+      - LND_TOR_PROXY=${LND_TOR_PROXY:-}
+      - LND_MEMPOOL_URL=${LND_MEMPOOL_URL:-https://mempool.space}
+      - LND_MAX_PAYMENT_SATS=${LND_MAX_PAYMENT_SATS:-10000}
+      # Boltz Exchange Tor routing
+      - BOLTZ_USE_TOR=${BOLTZ_USE_TOR:-true}
+      - BOLTZ_FALLBACK_CLEARNET=${BOLTZ_FALLBACK_CLEARNET:-false}
+      # Nostr (Decentralized Social Protocol)
+      - USE_NOSTR=${USE_NOSTR:-false}
+      - NOSTR_DEFAULT_RELAYS=${NOSTR_DEFAULT_RELAYS:-wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band,wss://relay.snort.social}
+      - NOSTR_POST_RATE_LIMIT_HOUR=${NOSTR_POST_RATE_LIMIT_HOUR:-10}
+      - NOSTR_POST_RATE_LIMIT_DAY=${NOSTR_POST_RATE_LIMIT_DAY:-50}
+      - NOSTR_RELAY_TIMEOUT=${NOSTR_RELAY_TIMEOUT:-5}
+      - NOSTR_RELAY_CONNECT_TIMEOUT=${NOSTR_RELAY_CONNECT_TIMEOUT:-3}
+      - NOSTR_LIGHTNING_ADDRESS=${NOSTR_LIGHTNING_ADDRESS:-}
+      # Dev Sandbox (Isolated Agent Development Environment)
+      - USE_DEV_SANDBOX=${USE_DEV_SANDBOX:-true}
+      - DEV_SANDBOX_DEFAULT_IMAGE=${DEV_SANDBOX_DEFAULT_IMAGE:-python:3.12-slim}
+      - DEV_SANDBOX_MAX_CONCURRENT=${DEV_SANDBOX_MAX_CONCURRENT:-5}
+      - DEV_SANDBOX_DEFAULT_TIMEOUT=${DEV_SANDBOX_DEFAULT_TIMEOUT:-300}
+      - DEV_SANDBOX_MAX_TIMEOUT=${DEV_SANDBOX_MAX_TIMEOUT:-1800}
+      - DEV_SANDBOX_DEFAULT_MEMORY=${DEV_SANDBOX_DEFAULT_MEMORY:-512m}
+      - DEV_SANDBOX_MAX_MEMORY=${DEV_SANDBOX_MAX_MEMORY:-2g}
+      - DEV_SANDBOX_NETWORK_ACCESS=${DEV_SANDBOX_NETWORK_ACCESS:-false}
+      # Internal service authentication keys
+      - GPU_SERVICE_API_KEY=${GPU_SERVICE_API_KEY:-}
+      - SERVICE_MANAGER_API_KEY=${SERVICE_MANAGER_API_KEY:-}
+      # GPU Service Manager (host-side agent for restarting services after eviction).
+      # The service manager binds 0.0.0.0 so it's reachable from Docker on all platforms.
+      - SERVICE_MANAGER_URL=${SERVICE_MANAGER_URL:-http://host.docker.internal:9100}
+      # Docker socket proxy for Dev Sandbox (instead of raw /var/run/docker.sock)
+      - DOCKER_HOST=tcp://docker-proxy:2375
+    volumes:
+      - ./backend:/app:ro   # RT-17: read-only source mount
+      - uploads_data:/app/uploads
+      # Media Library: read-only mounts of tool output directories for browsing/thumbnails
+      # Mounted outside /app because /app is a read-only bind mount
+      - ./acestep/output:/data/tool_outputs/acestep-music-generation:ro
+      - ./qwen3-tts/output:/data/tool_outputs/qwen3-tts-voice:ro
+      - ./z-image/output:/data/tool_outputs/zimage-generation:ro
+      - ./seedvr2-upscaler/output:/data/tool_outputs/seedvr2-upscaler:ro
+      - ./canary-stt/output:/data/tool_outputs/canary-stt:ro
+      - ./ltx-video/output:/data/tool_outputs/ltx-video-generation:ro
+      - ./audiosr/output:/data/tool_outputs/audiosr-enhance:ro
+      - ./media-toolkit/output:/data/tool_outputs/media-toolkit:ro
+      - ./realesrgan-cpu/output:/data/tool_outputs/realesrgan-cpu-upscaler:ro
+      - ./docling-parser/output:/data/tool_outputs/docling-parser:ro
+      - media_cache:/data/media_cache  # Writable volume for thumbnail cache
+      # Additional storage volumes can be added via docker-compose.override.yml
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      docker-proxy:
+        condition: service_started
+    extra_hosts:
+      # Cross-platform host access: resolves to the Docker bridge gateway IP.
+      #   Linux (Docker Engine): maps to docker0 bridge (e.g. 172.17.0.1)
+      #   macOS / Windows / Linux Docker Desktop: natively supported
+      # Requires Docker Engine 20.10+ for host-gateway support.
+      - "host.docker.internal:host-gateway"
+    networks:
+      - frontend-net
+      - backend-net
+    restart: unless-stopped
+    # RT-16: Resource limits
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 256
+    # RT-21: Security options
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL                          # Drop all Linux capabilities
+    cap_add:
+      - NET_BIND_SERVICE             # Needed to bind port 8000
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    # GPU config is in docker-compose.override.yml (auto-generated by start.py)
+    # To manually enable: see docker-compose.override.yml.example
+
+  # Frontend (Dev — Vite dev server with HMR)
+  # GAP-6: For production deployments, use the "prod" profile:
+  #   docker compose --profile prod up
+  # This starts frontend-prod (nginx + CSP headers) instead of the dev server.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: money-agents-frontend
+    ports:
+      - "127.0.0.1:5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+    volumes:
+      - ./frontend:/app:ro   # RT-17: read-only source mount
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - frontend-net
+    restart: unless-stopped
+    # RT-16: Resource limits
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    # RT-21: Security options
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL                          # SA2-15: Drop all Linux capabilities
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+
+  # Frontend (Production — nginx with CSP headers, multi-stage build)
+  # GAP-6: Activated via `docker compose --profile prod up --scale frontend=0`
+  # This replaces the Vite dev server with a production nginx build.
+  frontend-prod:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    container_name: money-agents-frontend-prod
+    profiles: ["prod"]
+    ports:
+      - "127.0.0.1:5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - frontend-net
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE             # nginx needs to bind port 80
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+
+  # Celery Worker - processes background agent tasks
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: money-agents-celery-worker
+    command: celery -A app.core.celery_app worker --loglevel=info --queues=default,agents --concurrency=2
+    # SGA3-I2: Health check for proactive crash detection
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.core.celery_app inspect ping --timeout 10 2>/dev/null | grep -q pong || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://money_agents:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/money_agents
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/2
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - LOG_LEVEL=INFO
+      - Z_AI_API_KEY=${Z_AI_API_KEY:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+      - SERPER_API_KEY=${SERPER_API_KEY:-}
+      # Serper Clone (self-hosted search)
+      - USE_SERPER_CLONE=${USE_SERPER_CLONE:-false}
+      - SERPER_CLONE_URL=${SERPER_CLONE_URL:-}
+      # LLM Provider Priority
+      - LLM_PROVIDER_PRIORITY=${LLM_PROVIDER_PRIORITY:-glm,claude,openai,ollama}
+      # Ollama (Local LLM) Configuration
+      - USE_OLLAMA=${USE_OLLAMA:-false}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL_TIERS=${OLLAMA_MODEL_TIERS:-hf.co/mradermacher/Nanbeige4.1-3B-GGUF:Q8_0,mistral-nemo:12b,glm-4.7-flash:latest}
+      - OLLAMA_CONTEXT_LENGTHS=${OLLAMA_CONTEXT_LENGTHS:-262144,65536,8192}
+      - OLLAMA_MAX_CONCURRENT=${OLLAMA_MAX_CONCURRENT:-1}
+      # ACE-Step (Local Music Generation) Configuration
+      - USE_ACESTEP=${USE_ACESTEP:-false}
+      - ACESTEP_API_URL=${ACESTEP_API_URL:-http://host.docker.internal:8001}
+      - ACESTEP_API_PORT=${ACESTEP_API_PORT:-8001}
+      - ACESTEP_MODEL=${ACESTEP_MODEL:-base}
+      - ACESTEP_AUTO_START=${ACESTEP_AUTO_START:-false}
+      - ACESTEP_DOWNLOAD_SOURCE=${ACESTEP_DOWNLOAD_SOURCE:-auto}
+      # Qwen3-TTS (Local Voice Generation) Configuration
+      - USE_QWEN3_TTS=${USE_QWEN3_TTS:-false}
+      - QWEN3_TTS_API_URL=${QWEN3_TTS_API_URL:-http://host.docker.internal:8002}
+      - QWEN3_TTS_API_PORT=${QWEN3_TTS_API_PORT:-8002}
+      - QWEN3_TTS_TIER=${QWEN3_TTS_TIER:-auto}
+      - QWEN3_TTS_AUTO_START=${QWEN3_TTS_AUTO_START:-true}
+      - QWEN3_TTS_IDLE_TIMEOUT=${QWEN3_TTS_IDLE_TIMEOUT:-300}
+      # Z-Image (Local Image Generation) Configuration
+      - USE_ZIMAGE=${USE_ZIMAGE:-false}
+      - ZIMAGE_API_URL=${ZIMAGE_API_URL:-http://host.docker.internal:8003}
+      - ZIMAGE_API_PORT=${ZIMAGE_API_PORT:-8003}
+      - ZIMAGE_MODEL=${ZIMAGE_MODEL:-turbo}
+      - ZIMAGE_AUTO_START=${ZIMAGE_AUTO_START:-true}
+      - ZIMAGE_IDLE_TIMEOUT=${ZIMAGE_IDLE_TIMEOUT:-300}
+      # SeedVR2 (Local Image & Video Upscaler) Configuration
+      - USE_SEEDVR2=${USE_SEEDVR2:-false}
+      - SEEDVR2_API_URL=${SEEDVR2_API_URL:-http://host.docker.internal:8004}
+      - SEEDVR2_API_PORT=${SEEDVR2_API_PORT:-8004}
+      - SEEDVR2_MODEL=${SEEDVR2_MODEL:-seedvr2_ema_3b_fp8_e4m3fn.safetensors}
+      - SEEDVR2_AUTO_START=${SEEDVR2_AUTO_START:-true}
+      - SEEDVR2_IDLE_TIMEOUT=${SEEDVR2_IDLE_TIMEOUT:-300}
+      # Canary-STT (Local Speech-to-Text) Configuration
+      - USE_CANARY_STT=${USE_CANARY_STT:-false}
+      - CANARY_STT_API_URL=${CANARY_STT_API_URL:-http://host.docker.internal:8005}
+      - CANARY_STT_API_PORT=${CANARY_STT_API_PORT:-8005}
+      - CANARY_STT_AUTO_START=${CANARY_STT_AUTO_START:-true}
+      - CANARY_STT_IDLE_TIMEOUT=${CANARY_STT_IDLE_TIMEOUT:-300}
+      # AudioSR (Local Audio Super-Resolution) Configuration
+      - USE_AUDIOSR=${USE_AUDIOSR:-false}
+      - AUDIOSR_API_URL=${AUDIOSR_API_URL:-http://host.docker.internal:8007}
+      - AUDIOSR_API_PORT=${AUDIOSR_API_PORT:-8007}
+      - AUDIOSR_MODEL=${AUDIOSR_MODEL:-basic}
+      - AUDIOSR_AUTO_START=${AUDIOSR_AUTO_START:-true}
+      - AUDIOSR_IDLE_TIMEOUT=${AUDIOSR_IDLE_TIMEOUT:-300}
+      - GPU_AUDIOSR=${GPU_AUDIOSR:-0}
+      # Media Toolkit (FFmpeg-based media composition) Configuration
+      - USE_MEDIA_TOOLKIT=${USE_MEDIA_TOOLKIT:-false}
+      - MEDIA_TOOLKIT_API_URL=${MEDIA_TOOLKIT_API_URL:-http://host.docker.internal:8008}
+      - MEDIA_TOOLKIT_API_PORT=${MEDIA_TOOLKIT_API_PORT:-8008}
+      - MEDIA_TOOLKIT_AUTO_START=${MEDIA_TOOLKIT_AUTO_START:-true}
+      # Real-ESRGAN CPU (CPU-only image & video upscaling) Configuration
+      - USE_REALESRGAN_CPU=${USE_REALESRGAN_CPU:-false}
+      - REALESRGAN_CPU_API_URL=${REALESRGAN_CPU_API_URL:-http://host.docker.internal:8009}
+      - REALESRGAN_CPU_API_PORT=${REALESRGAN_CPU_API_PORT:-8009}
+      - REALESRGAN_CPU_MODEL=${REALESRGAN_CPU_MODEL:-realesr-animevideov3}
+      - REALESRGAN_CPU_AUTO_START=${REALESRGAN_CPU_AUTO_START:-true}
+      # Docling Document Parser (CPU-only document parsing) Configuration
+      - USE_DOCLING=${USE_DOCLING:-false}
+      - DOCLING_API_URL=${DOCLING_API_URL:-http://host.docker.internal:8010}
+      - DOCLING_API_PORT=${DOCLING_API_PORT:-8010}
+      - DOCLING_AUTO_START=${DOCLING_AUTO_START:-true}
+      # LTX-2 Video (Local Text-to-Video Generation) Configuration
+      - USE_LTX_VIDEO=${USE_LTX_VIDEO:-false}
+      - LTX_VIDEO_API_URL=${LTX_VIDEO_API_URL:-http://host.docker.internal:8006}
+      - LTX_VIDEO_API_PORT=${LTX_VIDEO_API_PORT:-8006}
+      - LTX_VIDEO_AUTO_START=${LTX_VIDEO_AUTO_START:-true}
+      - LTX_VIDEO_IDLE_TIMEOUT=${LTX_VIDEO_IDLE_TIMEOUT:-300}
+      - LTX_VIDEO_MODEL_DIR=${LTX_VIDEO_MODEL_DIR:-models/ltx-2}
+      - GPU_LTX_VIDEO=${GPU_LTX_VIDEO:-0}
+      # Bitcoin / LND Lightning Node
+      - USE_LND=${USE_LND:-false}
+      - LND_REST_URL=${LND_REST_URL:-https://host.docker.internal:8080}
+      - LND_MACAROON_HEX=${LND_MACAROON_HEX:-}
+      - LND_TLS_VERIFY=${LND_TLS_VERIFY:-true}
+      - LND_TLS_CERT=${LND_TLS_CERT:-}
+      - LND_TOR_PROXY=${LND_TOR_PROXY:-}
+      - LND_MEMPOOL_URL=${LND_MEMPOOL_URL:-https://mempool.space}
+      - LND_MAX_PAYMENT_SATS=${LND_MAX_PAYMENT_SATS:-10000}
+      # Boltz Exchange Tor routing
+      - BOLTZ_USE_TOR=${BOLTZ_USE_TOR:-true}
+      - BOLTZ_FALLBACK_CLEARNET=${BOLTZ_FALLBACK_CLEARNET:-false}
+      # Nostr (Decentralized Social Protocol)
+      - USE_NOSTR=${USE_NOSTR:-false}
+      - NOSTR_DEFAULT_RELAYS=${NOSTR_DEFAULT_RELAYS:-wss://relay.damus.io,wss://nos.lol,wss://relay.nostr.band,wss://relay.snort.social}
+      - NOSTR_POST_RATE_LIMIT_HOUR=${NOSTR_POST_RATE_LIMIT_HOUR:-10}
+      - NOSTR_POST_RATE_LIMIT_DAY=${NOSTR_POST_RATE_LIMIT_DAY:-50}
+      - NOSTR_RELAY_TIMEOUT=${NOSTR_RELAY_TIMEOUT:-5}
+      - NOSTR_RELAY_CONNECT_TIMEOUT=${NOSTR_RELAY_CONNECT_TIMEOUT:-3}
+      - NOSTR_LIGHTNING_ADDRESS=${NOSTR_LIGHTNING_ADDRESS:-}
+      # Dev Sandbox (Isolated Agent Development Environment)
+      - USE_DEV_SANDBOX=${USE_DEV_SANDBOX:-true}
+      - DEV_SANDBOX_DEFAULT_IMAGE=${DEV_SANDBOX_DEFAULT_IMAGE:-python:3.12-slim}
+      - DEV_SANDBOX_MAX_CONCURRENT=${DEV_SANDBOX_MAX_CONCURRENT:-5}
+      - DEV_SANDBOX_DEFAULT_TIMEOUT=${DEV_SANDBOX_DEFAULT_TIMEOUT:-300}
+      - DEV_SANDBOX_MAX_TIMEOUT=${DEV_SANDBOX_MAX_TIMEOUT:-1800}
+      - DEV_SANDBOX_DEFAULT_MEMORY=${DEV_SANDBOX_DEFAULT_MEMORY:-512m}
+      - DEV_SANDBOX_MAX_MEMORY=${DEV_SANDBOX_MAX_MEMORY:-2g}
+      - DEV_SANDBOX_NETWORK_ACCESS=${DEV_SANDBOX_NETWORK_ACCESS:-false}
+      # Docker socket proxy for Dev Sandbox (instead of raw /var/run/docker.sock)
+      - DOCKER_HOST=tcp://docker-proxy:2375
+    volumes:
+      - ./backend:/app:ro   # RT-17: read-only source mount
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      docker-proxy:
+        condition: service_started
+    extra_hosts:
+      # Cross-platform host access (see backend service for details)
+      - "host.docker.internal:host-gateway"
+    networks:
+      - backend-net
+    restart: unless-stopped
+    # RT-16: Resource limits
+    mem_limit: 4g
+    cpus: 2.0
+    pids_limit: 256
+    # RT-21: Security options
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL                          # Drop all Linux capabilities
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+
+  # Celery Beat - schedules periodic agent tasks
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: money-agents-celery-beat
+    command: celery -A app.core.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    # SGA3-I2: Health check — verify schedule file is being updated
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/celerybeat-schedule && find /tmp/celerybeat-schedule -mmin -5 | grep -q . || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    tmpfs:
+      - /tmp
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://money_agents:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/money_agents
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/2
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+    volumes:
+      - ./backend:/app:ro   # RT-17: read-only source mount
+    depends_on:
+      - celery-worker
+    networks:
+      - backend-net
+    restart: unless-stopped
+    # RT-16: Resource limits
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 64
+    # RT-21: Security options
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+
+  # Flower - Celery monitoring UI (optional, for debugging)
+  # WARNING: Flower exposes task details. Access via: docker compose exec flower sh
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: money-agents-flower
+    command: celery -A app.core.celery_app flower --port=5555 --basic-auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:?Set FLOWER_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5555:5555"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://money_agents:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/money_agents
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/2
+    depends_on:
+      - celery-worker
+    networks:
+      - backend-net
+    restart: unless-stopped
+    # RT-16/RT-42: Resource limits for Flower
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+
+  # Docker Socket Proxy — restricts Docker API surface for Dev Sandbox
+  # Only the container/image/network/volume APIs are allowed; no privileged operations.
+  # Backend and celery-worker connect via DOCKER_HOST=tcp://docker-proxy:2375
+  # instead of mounting /var/run/docker.sock directly.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.3
+    container_name: money-agents-docker-proxy
+    environment:
+      # RT-02: Minimal permissions — deny everything by default
+      - CONTAINERS=1      # Create/start/stop/remove containers
+      - IMAGES=0           # Disabled — no image pull from inside containers
+      - NETWORKS=0         # Disabled — no network creation from containers
+      - VOLUMES=0          # Disabled — no volume creation from containers
+      - POST=1             # Allow POST requests (create/start)
+      # Explicitly deny dangerous operations
+      - ALLOW_START=1
+      - ALLOW_STOP=1
+      - ALLOW_RESTARTS=1
+      - AUTH=0
+      - SECRETS=0
+      - SWARM=0
+      - BUILD=0
+      - COMMIT=0
+      - CONFIGS=0
+      - DISTRIBUTION=0
+      - EXEC=1             # Needed for sandbox exec_command
+      - GRPC=0
+      - INFO=1
+      - NODES=0
+      - PING=1
+      - PLUGINS=0
+      - SERVICES=0
+      - SESSION=0
+      - SYSTEM=0
+      - TASKS=0
+      - VERSION=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - backend-net
+    restart: unless-stopped
+    tmpfs:
+      - /run
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 100
+
+  # Tor SOCKS5 Proxy (for reaching LND nodes on Tor .onion addresses)
+  # Only starts when COMPOSE_PROFILES includes "tor" (auto-set by start.py for .onion URLs)
+  tor-proxy:
+    build:
+      context: ./tor-proxy
+    container_name: money-agents-tor-proxy
+    profiles: ["tor"]
+    networks:
+      - backend-net
+    restart: unless-stopped
+    # SGA3-M5: Container security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    ulimits:
+      core: { soft: 0, hard: 0 }
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 100
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  chroma_data:
+    driver: local
+  uploads_data:
+    driver: local
+  media_cache:
+    driver: local
+  frontend_node_modules:
+    driver: local
+
+networks:
+  # GAP-7: Network segmentation — frontend can only reach backend,
+  # not postgres/redis/celery/flower/docker-proxy directly.
+  frontend-net:
+    driver: bridge
+  backend-net:
+    driver: bridge
+  # SGA3-M8: Pre-create sandbox networks so they exist before
+  # DevSandboxService tries to use them (avoids race conditions).
+  sandbox-isolated:
+    driver: bridge
+    internal: true  # No outbound internet
+    labels:
+      money-agents.sandbox: "true"
+  sandbox-internet:
+    driver: bridge
+    internal: false
+    labels:
+      money-agents.sandbox: "true"
+

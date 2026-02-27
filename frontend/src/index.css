@@ -1,0 +1,209 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-navy-950 text-gray-100;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-neon-cyan text-navy-950 px-4 py-2 rounded-lg font-semibold;
+    @apply hover:bg-neon-blue hover:shadow-neon-cyan transition-all duration-200;
+    @apply active:scale-95;
+  }
+  
+  .btn-secondary {
+    @apply bg-navy-800 text-neon-cyan px-4 py-2 rounded-lg font-semibold;
+    @apply border border-neon-cyan/30 hover:border-neon-cyan hover:shadow-neon-cyan;
+    @apply transition-all duration-200 active:scale-95;
+  }
+  
+  .btn-danger {
+    @apply bg-neon-pink/20 text-neon-pink px-4 py-2 rounded-lg font-semibold;
+    @apply border border-neon-pink/30 hover:border-neon-pink hover:bg-neon-pink/30;
+    @apply transition-all duration-200 active:scale-95;
+  }
+  
+  .card {
+    @apply bg-navy-900 border border-navy-700 rounded-lg p-6;
+    @apply shadow-lg hover:shadow-neon-cyan/20 transition-shadow duration-300;
+  }
+  
+  .input {
+    @apply bg-navy-800 border border-navy-600 rounded-lg px-4 py-2;
+    @apply text-gray-100 placeholder-gray-500;
+    @apply focus:outline-none focus:border-neon-cyan focus:ring-1 focus:ring-neon-cyan;
+    @apply transition-all duration-200;
+  }
+  
+  .badge {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-medium;
+  }
+  
+  .badge-success {
+    @apply badge bg-neon-green/20 text-neon-green border border-neon-green/30;
+  }
+  
+  .badge-warning {
+    @apply badge bg-neon-yellow/20 text-neon-yellow border border-neon-yellow/30;
+  }
+  
+  .badge-danger {
+    @apply badge bg-neon-pink/20 text-neon-pink border border-neon-pink/30;
+  }
+  
+  .badge-info {
+    @apply badge bg-neon-cyan/20 text-neon-cyan border border-neon-cyan/30;
+  }
+}
+
+/* Markdown Editor Customization */
+.w-md-editor {
+  background-color: rgba(0, 0, 0, 0.3) !important;
+  border: 1px solid rgb(55, 65, 81) !important;
+  box-shadow: none !important;
+}
+
+.w-md-editor-toolbar {
+  background-color: rgba(0, 0, 0, 0.5) !important;
+  border-bottom: 1px solid rgb(55, 65, 81) !important;
+}
+
+.w-md-editor-toolbar button {
+  color: rgb(156, 163, 175) !important;
+}
+
+.w-md-editor-toolbar button:hover {
+  color: rgb(6, 182, 212) !important;
+  background-color: rgba(6, 182, 212, 0.1) !important;
+}
+
+.w-md-editor-text-pre,
+.w-md-editor-text-input {
+  background-color: transparent !important;
+  color: rgb(229, 231, 235) !important;
+}
+
+.w-md-editor-text-pre code,
+.w-md-editor-text-input {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace !important;
+}
+
+/* Markdown Preview Styling */
+.wmde-markdown {
+  background-color: transparent !important;
+  color: rgb(229, 231, 235) !important;
+}
+
+.wmde-markdown h1,
+.wmde-markdown h2,
+.wmde-markdown h3,
+.wmde-markdown h4,
+.wmde-markdown h5,
+.wmde-markdown h6 {
+  color: rgb(6, 182, 212) !important;
+  border-bottom-color: rgb(55, 65, 81) !important;
+}
+
+.wmde-markdown code {
+  background-color: rgba(0, 0, 0, 0.5) !important;
+  color: rgb(6, 182, 212) !important;
+  padding: 2px 6px !important;
+  border-radius: 4px !important;
+}
+
+.wmde-markdown pre {
+  background-color: rgba(0, 0, 0, 0.5) !important;
+  border: 1px solid rgb(55, 65, 81) !important;
+  border-radius: 8px !important;
+  padding: 12px !important;
+  margin: 8px 0 !important;
+}
+
+.wmde-markdown pre code {
+  background-color: transparent !important;
+  color: rgb(229, 231, 235) !important;
+  padding: 0 !important;
+  display: block !important;
+}
+
+.wmde-markdown a {
+  color: rgb(6, 182, 212) !important;
+}
+
+.wmde-markdown a:hover {
+  color: rgb(8, 145, 178) !important;
+  text-decoration: underline !important;
+}
+
+.wmde-markdown blockquote {
+  border-left-color: rgb(6, 182, 212) !important;
+  color: rgb(156, 163, 175) !important;
+}
+
+.wmde-markdown table {
+  border-color: rgb(55, 65, 81) !important;
+}
+
+.wmde-markdown table th,
+.wmde-markdown table td {
+  border-color: rgb(55, 65, 81) !important;
+}
+
+.wmde-markdown table tr {
+  background-color: transparent !important;
+}
+
+.wmde-markdown table tr:nth-child(2n) {
+  background-color: rgba(0, 0, 0, 0.2) !important;
+}
+
+/* CodeMirror JSON Editor Customization */
+.cm-editor {
+  background-color: rgba(0, 0, 0, 0.3) !important;
+}
+
+.cm-editor .cm-scroller {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace !important;
+}
+
+.cm-editor.cm-focused {
+  outline: none !important;
+  border-color: rgb(6, 182, 212) !important;
+}
+
+.cm-editor .cm-gutters {
+  background-color: rgba(0, 0, 0, 0.5) !important;
+  border-right-color: rgb(55, 65, 81) !important;
+}
+
+.cm-editor .cm-content {
+  padding: 8px !important;
+}
+
+/* JSON Syntax Highlighting - matching markdown code blocks */
+.cm-editor .cm-string {
+  color: rgb(134, 239, 172) !important; /* green-300 for strings */
+}
+
+.cm-editor .cm-number {
+  color: rgb(147, 197, 253) !important; /* blue-300 for numbers */
+}
+
+.cm-editor .cm-bool,
+.cm-editor .cm-null {
+  color: rgb(196, 181, 253) !important; /* purple-300 for booleans/null */
+}
+
+.cm-editor .cm-property {
+  color: rgb(6, 182, 212) !important; /* neon-cyan for property names */
+}
+
+.cm-editor .cm-punctuation {
+  color: rgb(156, 163, 175) !important; /* gray-400 for punctuation */
+}
+
+

@@ -1,0 +1,200 @@
+# Resource Agent Configuration Template
+# =====================================
+# 
+# Copy this file to config.yaml and customize for your machine.
+# 
+# HOSTNAME-BASED IDENTIFICATION:
+# -----------------------------
+# The broker identifies agents by their hostname. When you register
+# an agent via the admin API, use the machine's actual hostname.
+# 
+# To find your hostname:
+#   Linux:   hostname
+#   Windows: hostname
+#   Or:      python -c "import socket; print(socket.gethostname())"
+#
+# REGISTRATION STEPS:
+# ------------------
+# 1. First, register your agent with the broker (as admin):
+#    
+#    POST /api/v1/broker/agents
+#    {
+#      "hostname": "your-actual-hostname",    # REQUIRED - must match machine hostname
+#      "display_name": "Friendly Name",       # Optional
+#      "description": "My GPU workstation",
+#      "tags": ["gpu", "linux"]
+#    }
+#
+# 2. Copy the API key from the response (only shown once!)
+#
+# 3. Configure this file with the API key
+#
+# 4. Run the agent: python agent.py
+
+broker:
+  # WebSocket URL to the broker
+  url: "ws://your-server:8000/api/v1/broker/agent"
+  
+  # API key from registration (only shown once when you register!)
+  api_key: "YOUR-API-KEY-HERE"
+  
+  # Reconnection settings
+  reconnect_delay: 5         # Initial delay in seconds
+  max_reconnect_delay: 60    # Maximum delay after repeated failures
+  heartbeat_interval: 30     # Seconds between heartbeats
+
+agent:
+  # Display name (optional - if null, uses hostname)
+  # This is NOT the identifier - hostname is always the identifier
+  name: null
+  
+  # Description shown in admin UI
+  description: "Describe this machine and its capabilities"
+  
+  # Searchable tags
+  tags: ["linux", "gpu"]
+  
+  # Working directory for job files (null = ./work)
+  work_dir: null
+
+capabilities:
+  # GPU detection
+  # null = auto-detect using nvidia-smi
+  # true = force enable (for manual override)
+  # false = force disable
+  gpu_enabled: null
+  
+  # Maximum simultaneous jobs this agent can handle
+  max_concurrent_jobs: 1
+  
+  # Additional storage paths to report to broker
+  storage_paths: []
+
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  
+  # Output format: "console" (human readable) or "json" (structured)
+  format: "console"
+  
+  # Log file path (null = stdout only)
+  file: null
+
+
+# ============================================================================
+# CAMPAIGN WORKER CONFIGURATION (Distributed Campaign Execution)
+# ============================================================================
+# 
+# Enable this to allow this agent to execute campaign tasks autonomously.
+# The agent will make direct LLM API calls and report results back to the backend.
+
+campaign_worker:
+  # Enable campaign worker mode
+  enabled: false
+  
+  # Maximum simultaneous campaigns to process
+  max_campaigns: 3
+  
+  # Heartbeat interval for lease renewal (seconds)
+  heartbeat_interval: 60
+  
+  # =========================================================================
+  # LLM Provider Priority (matches main app behavior)
+  # =========================================================================
+  # Comma-separated list of providers to try in order.
+  # Providers without API keys are automatically skipped.
+  # Ollama should be last since it's rate-limited (often 1 concurrent request)
+  # Default: "glm,claude,openai,ollama"
+  llm_provider_priority: "glm,claude,openai,ollama"
+  
+  # =========================================================================
+  # API Keys (set the ones you have)
+  # =========================================================================
+  # These use the SAME env var names as the main app for consistency.
+  # Set via environment variables for security (don't commit secrets!):
+  #   ANTHROPIC_API_KEY  - For Claude (Anthropic)
+  #   OPENAI_API_KEY     - For OpenAI (GPT models)
+  #   Z_AI_API_KEY       - For GLM (Zhipu AI)
+  
+  anthropic_api_key: ""   # or set ANTHROPIC_API_KEY env var
+  openai_api_key: ""      # or set OPENAI_API_KEY env var
+  zhipu_api_key: ""       # or set Z_AI_API_KEY env var
+  
+  # =========================================================================
+  # Ollama (Local LLM) Configuration
+  # =========================================================================
+  # Ollama provides local LLM execution. It's always tried LAST because
+  # it's typically rate-limited to 1 concurrent request on local hardware.
+  #
+  # Prerequisites:
+  #   1. Install Ollama: https://ollama.com/download
+  #   2. Pull models: ollama pull mistral:7b
+  #   3. Start server: ollama serve (or it runs automatically)
+  
+  # Enable Ollama (set USE_OLLAMA=true env var or here)
+  use_ollama: false
+  
+  # Ollama server URL (local or remote)
+  ollama_base_url: "http://localhost:11434"
+  
+  # Model tiers: fast, reasoning, quality (comma-separated)
+  # Must pull these models first: ollama pull <model>
+  ollama_model_tiers: "mistral:7b,mistral-nemo:12b,glm-4.7-flash:latest"
+  
+  # Context lengths for each tier (comma-separated, matching tier order)
+  ollama_context_lengths: "8192,16384,4096"
+  
+  # Max concurrent requests (usually 1 for local GPU)
+  # Increase if you have multiple GPUs or are using a remote Ollama cluster
+  ollama_max_concurrent: 1
+  
+  # =========================================================================
+  # Optional: Custom API Endpoints
+  # =========================================================================
+  # anthropic_api_base: "https://api.anthropic.com/v1/messages"
+  # openai_api_base: "https://api.openai.com/v1/chat/completions"
+  # zhipu_api_base: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+  
+  # =========================================================================
+  # Model Settings (usually inherited from campaign assignment)
+  # =========================================================================
+  # Default model tier if not specified by campaign
+  # Options: "fast", "reasoning", "quality"
+  llm_default_model_tier: "reasoning"
+  
+  # Max tokens per LLM call (standard is 6000)
+  llm_max_tokens: 6000
+
+
+# ============================================================================
+# ENVIRONMENT VARIABLE OVERRIDES
+# ============================================================================
+# You can also configure via environment variables (useful for Docker/systemd):
+#
+# Broker Settings:
+#   BROKER_URL          - WebSocket URL
+#   BROKER_API_KEY      - API key
+#
+# Agent Settings:
+#   AGENT_NAME          - Display name
+#   LOG_LEVEL           - Logging level
+#   WORK_DIR            - Working directory
+#   MAX_CONCURRENT_JOBS - Max parallel jobs
+#
+# Campaign Worker Settings:
+#   CAMPAIGN_WORKER_ENABLED  - Enable campaign worker (true/false)
+#   CAMPAIGN_MAX_CAMPAIGNS   - Max simultaneous campaigns
+#   LLM_PROVIDER_PRIORITY    - Provider order (e.g., "glm,claude,openai,ollama")
+#   ANTHROPIC_API_KEY        - Anthropic (Claude) API key
+#   OPENAI_API_KEY           - OpenAI API key
+#   Z_AI_API_KEY             - Zhipu (GLM) API key
+#   LLM_MODEL_TIER           - Default model tier
+#
+# Ollama Settings:
+#   USE_OLLAMA               - Enable Ollama (true/false)
+#   OLLAMA_BASE_URL          - Ollama server URL
+#   OLLAMA_MODEL_TIERS       - Models for each tier (comma-separated)
+#   OLLAMA_CONTEXT_LENGTHS   - Context lengths (comma-separated)
+#   OLLAMA_MAX_CONCURRENT    - Max concurrent requests (default: 1)
+#
+# Environment variables take precedence over config file values.

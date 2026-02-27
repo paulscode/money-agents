@@ -1,0 +1,42 @@
+# Z-Image Standalone Server Configuration
+# This runs natively using the Z-Image PyTorch implementation (NOT ComfyUI)
+
+server:
+  host: "0.0.0.0"
+  port: 8003
+
+model:
+  # Model variant: turbo (8 steps, fast) or base (50 steps, highest quality)
+  variant: turbo
+  # torch.compile for faster inference after warmup (disabled by default for compatibility)
+  compile: false
+  # Attention backend: _native_flash (default), _flash_3 (fastest, Hopper GPUs)
+  attention_backend: _native_flash
+  # HuggingFace repo IDs
+  turbo_repo: "Tongyi-MAI/Z-Image-Turbo"
+  base_repo: "Tongyi-MAI/Z-Image"
+
+# Memory management
+memory:
+  # Unload model after this many seconds of inactivity (0 = never unload)
+  # Frees GPU VRAM for ACE-Step, Qwen3-TTS, or other tasks
+  idle_timeout: 300
+  # Data type for model weights
+  dtype: bfloat16
+
+# Output file settings
+output:
+  directory: output
+  prefix: ZIMG_
+  digits: 5
+  extension: png
+
+# Default generation parameters
+defaults:
+  width: 1024
+  height: 1024
+  # 8 for turbo, 50 for base
+  num_inference_steps: 8
+  # 0.0 for turbo (distilled), 3.5 for base
+  guidance_scale: 0.0
+  max_sequence_length: 512

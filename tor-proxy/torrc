@@ -1,0 +1,16 @@
+# Minimal Tor configuration for SOCKS5 proxy
+# Used by Money Agents to reach LND nodes on Tor (.onion addresses)
+
+# Listen on all interfaces so Docker containers can reach us
+SocksPort 0.0.0.0:9050
+
+# Only accept connections from the Docker bridge network (172.16.0.0/12)
+# SA2-18: Removed overly broad 192.168.0.0/16 — Docker containers use 172.x.x.x
+SocksPolicy accept 172.16.0.0/12
+SocksPolicy reject *
+
+# Disable exit relay (we only need client functionality)
+ExitRelay 0
+
+# Reduce log noise  
+Log notice stderr

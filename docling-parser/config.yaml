@@ -1,0 +1,9 @@
+# Docling Document Parser Configuration
+name: docling-parser
+display_name: Docling Document Parser
+port: 8010
+enabled: true
+description: >
+  Document parsing and conversion using IBM Docling.
+  Converts PDF, DOCX, PPTX, HTML, images, and more to Markdown or JSON.
+  CPU-only — no GPU required.

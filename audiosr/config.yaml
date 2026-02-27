@@ -1,0 +1,42 @@
+# AudioSR Standalone Server Configuration
+# Versatile Audio Super-Resolution at Scale
+# https://github.com/haoheliu/versatile_audio_super_resolution
+
+server:
+  host: "0.0.0.0"
+  port: 8007
+
+model:
+  # Model variant: basic (all audio types) or speech (speech-optimized)
+  variant: basic
+  # Output sample rate — AudioSR always outputs 48kHz
+  output_sample_rate: 48000
+
+inference:
+  # DDIM sampling steps — more steps = better quality but slower
+  # Recommended: 50 for quality, 25 for speed
+  ddim_steps: 50
+  # Guidance scale — higher = more faithful to input characteristics
+  guidance_scale: 3.5
+  # Maximum input audio duration in seconds
+  # AudioSR processes in ~5.12s chunks internally, but long audio may OOM
+  max_audio_duration: 120
+  # Enable chunking for long audio files (recommended for >10s)
+  chunking: true
+  # Chunk duration in seconds for long audio processing
+  chunk_duration: 15
+  # Overlap duration in seconds between chunks for smooth blending
+  overlap_duration: 2
+
+memory:
+  # Seconds of idle time before unloading model from GPU
+  # Set to 0 to never unload
+  idle_timeout: 300
+  # PyTorch dtype: float32, float16, or bfloat16
+  dtype: "float32"
+
+output:
+  directory: output
+  prefix: "AUDIOSR_"
+  digits: 5
+  extension: wav

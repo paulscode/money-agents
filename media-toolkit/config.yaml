@@ -1,0 +1,50 @@
+# Media Toolkit Standalone Server Configuration
+# FFmpeg-based media composition, splitting, and mixing
+# CPU-only — no GPU required
+
+server:
+  host: "0.0.0.0"
+  port: 8008
+
+ffmpeg:
+  # Path to ffmpeg binary (null = auto-detect from PATH)
+  path: null
+  # Path to ffprobe binary (null = auto-detect from PATH)
+  ffprobe_path: null
+
+limits:
+  # Maximum input file size in MB
+  max_input_size_mb: 2048
+  # Maximum output duration in seconds (0 = no limit)
+  max_output_duration: 3600
+  # Maximum number of input files per operation
+  max_input_files: 50
+  # Maximum number of audio tracks for mix/combine
+  max_audio_tracks: 20
+  # Maximum number of images for slideshow
+  max_slideshow_images: 100
+  # Processing timeout in seconds
+  processing_timeout: 600
+
+output:
+  directory: output
+  prefix: "MT_"
+  # Default video codec settings
+  video_codec: libx264
+  video_crf: 23
+  video_preset: medium
+  # Default audio codec settings
+  audio_codec: aac
+  audio_bitrate: "192k"
+  # Default output format
+  default_video_format: mp4
+  default_audio_format: wav
+  default_image_format: png
+
+slideshow:
+  # Default Ken Burns zoom range (1.0 = no zoom, 1.2 = 20% zoom)
+  zoom_range: 1.2
+  # Default pan speed (pixels per second equivalent)
+  pan_speed: 50
+  # Default crossfade duration in seconds
+  crossfade_duration: 0.5

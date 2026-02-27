@@ -1,0 +1,51 @@
+# SeedVR2 Upscaler Standalone Server Configuration
+# This runs natively using SeedVR2 PyTorch inference directly (NOT ComfyUI)
+# Based on: https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler
+
+server:
+  host: "0.0.0.0"
+  port: 8004
+
+model:
+  # DiT model — options:
+  #   3B FP8 (recommended): seedvr2_ema_3b_fp8_e4m3fn.safetensors (3.4GB, ~8-12GB VRAM)
+  #   3B FP16: seedvr2_ema_3b_fp16.safetensors (6.8GB, ~12-16GB VRAM)
+  #   7B FP8: seedvr2_ema_7b_fp8_e4m3fn.safetensors (8.5GB, ~14-18GB VRAM)
+  #   7B FP16: seedvr2_ema_7b_fp16.safetensors (16.5GB, ~20-24GB VRAM)
+  #   7B Sharp FP8: seedvr2_ema_7b_sharp_fp8_e4m3fn.safetensors (8.5GB, sharpened)
+  #   7B Sharp FP16: seedvr2_ema_7b_sharp_fp16.safetensors (16.5GB, sharpened)
+  #   3B Q8 GGUF: seedvr2_ema_3b-Q8_0.gguf (3.7GB, for low VRAM)
+  #   3B Q4 GGUF: seedvr2_ema_3b-Q4_K_M.gguf (2GB, minimum VRAM)
+  dit: "seedvr2_ema_3b_fp8_e4m3fn.safetensors"
+  # VAE model — always FP16
+  vae: "ema_vae_fp16.safetensors"
+
+defaults:
+  # Target short-side resolution (e.g., 1080 outputs ~1080p)
+  resolution: 1080
+  # Max resolution cap (0 = no limit). Set to prevent out-of-memory on large inputs.
+  max_resolution: 0
+  # Color correction method: lab (default), wavelet, wavelet_adaptive, hsv, adain, none
+  color_correction: "lab"
+  # For video: frames per batch. Must follow 4n+1 formula (5, 9, 13, 17, 21...)
+  batch_size: 5
+  # For video: temporal overlap frames for smooth blending between batches
+  temporal_overlap: 2
+  # Random seed for reproducibility (null = random)
+  seed: null
+
+memory:
+  # Unload model from GPU after this many seconds of inactivity
+  idle_timeout: 300
+  # BlockSwap: number of transformer blocks to offload to CPU (0 = disabled)
+  # 24GB VRAM doesn't need this. Set to 5-10 for 12-16GB VRAM.
+  blocks_to_swap: 0
+  # Offload DiT to CPU when loading VAE (saves ~4GB peak VRAM)
+  dit_offload: false
+  # VAE tiling for large outputs (reduces peak VRAM at cost of speed)
+  vae_tiling: false
+
+output:
+  directory: output
+  prefix: "SEEDVR2_"
+  digits: 5

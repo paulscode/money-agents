@@ -1,0 +1,12 @@
+# Qwen3-TTS Standalone Server Dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+aiofiles>=23.0
+httpx>=0.25.0
+pyyaml>=6.0
+soundfile>=0.12.0
+pydantic>=2.0
+python-multipart>=0.0.6
+
+# Qwen3-TTS model package (includes transformers, torch, torchaudio, etc.)
+qwen-tts>=0.1.1

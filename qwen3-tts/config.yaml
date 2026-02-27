@@ -1,0 +1,64 @@
+# Qwen3-TTS Standalone Server Configuration
+# This runs natively using the qwen-tts Python package (NOT ComfyUI)
+
+server:
+  host: "0.0.0.0"
+  port: 8002
+  
+models:
+  # Model IDs on Hugging Face — three separate checkpoints
+  custom_voice: "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"   # Built-in speakers with style instructions
+  voice_design: "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"   # Create voice from text description
+  base_full: "Qwen/Qwen3-TTS-12Hz-1.7B-Base"              # Voice clone (1.7B)
+  base_lite: "Qwen/Qwen3-TTS-12Hz-0.6B-Base"              # Voice clone (0.6B, lower VRAM)
+  tokenizer: "Qwen/Qwen3-TTS-Tokenizer-12Hz"              # Required for all models
+  
+  # Default model tier: auto, full, or lite
+  # auto = select based on GPU VRAM (>=8GB → full, <8GB → lite)
+  # full = use 1.7B variants (all modes available, ~8GB VRAM)
+  # lite = use 0.6B Base only (voice_clone mode only, ~4GB VRAM)
+  default_tier: "auto"
+
+# Memory management
+memory:
+  # Unload model after this many seconds of inactivity (0 = never unload)
+  idle_timeout: 300
+  # Use float16 for lower VRAM usage
+  dtype: "float16"
+
+# Built-in custom voices (only available with 1.7B model)
+# These are the 9 speakers built into Qwen3-TTS CustomVoice mode
+custom_voices:
+  - name: "Vivian"
+    language: "Chinese"
+    description: "Female Chinese speaker"
+  - name: "Serena"
+    language: "Chinese"
+    description: "Female Chinese speaker"
+  - name: "Uncle_Fu"
+    language: "Chinese"
+    description: "Male Chinese speaker"
+  - name: "Dylan"
+    language: "Chinese"
+    description: "Male Chinese speaker"
+  - name: "Eric"
+    language: "Chinese"
+    description: "Male Chinese speaker"
+  - name: "Ryan"
+    language: "English"
+    description: "Male English speaker"
+  - name: "Aiden"
+    language: "English"
+    description: "Male English speaker"
+  - name: "Ono_Anna"
+    language: "Japanese"
+    description: "Female Japanese speaker"
+  - name: "Sohee"
+    language: "Korean"
+    description: "Female Korean speaker"
+
+# Generation defaults
+generation:
+  max_length: 2048        # Max text length in characters
+  sample_rate: 24000      # Output sample rate
+  output_format: "wav"    # Output audio format

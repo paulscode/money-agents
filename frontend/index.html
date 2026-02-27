@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- SA3-L5: CSP meta tag as defense-in-depth fallback.
+         Production CSP is set via nginx headers (see nginx.conf).
+         connect-src includes http://localhost:* for dev mode (Vite on :5173, API on :8000).
+         frame-ancestors is omitted here because it is ignored in meta tags.
+         SGA3-L9: No 'unsafe-inline' on script-src to match production nginx CSP. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://gravatar.com; media-src 'self' blob:; connect-src 'self' http://localhost:* ws://localhost:* wss://localhost:* https://api.coingecko.com; font-src 'self';" />
+    <title>Money Agents - AI-Powered Opportunities</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

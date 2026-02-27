@@ -1,0 +1,50 @@
+# Real-ESRGAN CPU Upscaler Standalone Server Configuration
+# CPU-only image & video upscaling using Real-ESRGAN + NCNN
+# No GPU required — designed as a fallback when GPU is busy or unavailable
+
+server:
+  host: "0.0.0.0"
+  port: 8009
+
+model:
+  # Model name — options:
+  #   realesrgan-x4plus          (general-purpose 4x, best quality, slowest)
+  #   realesrnet-x4plus          (general-purpose 4x, faster, slightly lower quality)
+  #   realesr-animevideov3       (anime/cartoon optimized, good for video)
+  #   realesrgan-x4plus-anime    (anime images, 4x)
+  name: "realesr-animevideov3"
+  # Scale factor (2 or 4) — some models only support specific scales
+  # realesr-animevideov3 supports both 2x and 4x
+  # realesrgan-x4plus only supports 4x
+  scale: 2
+
+defaults:
+  # Number of tiles for processing (0 = no tiling, higher = lower memory)
+  # Recommended: 4-8 for CPU to keep memory usage reasonable
+  tile: 4
+  # Tile padding (pixels overlap between tiles for seamless blending)
+  tile_pad: 10
+  # Pre-padding (border padding before processing)
+  pre_pad: 0
+  # For video: max frames to process in parallel (CPU limited)
+  video_batch_size: 1
+  # For video: output FPS (null = same as input)
+  output_fps: null
+  # JPEG quality for image output (1-100, higher = better quality, larger file)
+  jpeg_quality: 95
+  # Output format for images (png or jpg)
+  image_format: "png"
+
+limits:
+  # Maximum input file size in MB
+  max_input_size_mb: 500
+  # Maximum video duration in seconds (CPU is slow — limit to prevent hour-long jobs)
+  max_video_duration: 120
+  # Processing timeout in seconds (CPU upscaling is slow)
+  processing_timeout: 3600
+  # Maximum output resolution (width * height) — 0 = no limit
+  max_output_pixels: 0
+
+output:
+  directory: output
+  prefix: "ESRGAN_"

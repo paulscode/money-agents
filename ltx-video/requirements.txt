@@ -1,0 +1,18 @@
+# LTX-2 Native Video Generation Server Dependencies
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+httpx>=0.27.0
+pyyaml>=6.0
+pydantic>=2.0
+
+# LTX-2 pipeline (installed from git — includes ltx-core dependency)
+# Install with: pip install -e "packages/ltx-pipelines[all]" from cloned repo
+# OR: pip install "ltx-pipelines @ git+https://github.com/Lightricks/LTX-2.git#subdirectory=packages/ltx-pipelines"
+# Note: also needs ltx-core:
+# pip install "ltx-core @ git+https://github.com/Lightricks/LTX-2.git#subdirectory=packages/ltx-core"
+
+torch>=2.7.0
+transformers>=4.51.0,<5.0.0
+safetensors
+accelerate
+huggingface_hub>=0.25.0
