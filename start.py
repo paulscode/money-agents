@@ -161,6 +161,84 @@ def print_error(msg: str):
     """Print error message."""
     print(f"{Colors.RED}✗{Colors.RESET} {msg}")
 
+
+def masked_input(prompt_text: str) -> str:
+    """Read input from the user while displaying asterisks instead of characters.
+
+    Works cross-platform (Linux/macOS via termios, Windows via msvcrt).
+    Supports backspace to delete characters.  Falls back to getpass if
+    the terminal does not support raw mode (e.g. piped stdin).
+    """
+    import sys
+    sys.stdout.write(prompt_text)
+    sys.stdout.flush()
+
+    chars: list[str] = []
+
+    if IS_WINDOWS:
+        # Windows: use msvcrt for character-at-a-time reading
+        import msvcrt
+        while True:
+            ch = msvcrt.getwch()
+            if ch in ('\r', '\n'):
+                sys.stdout.write('\n')
+                sys.stdout.flush()
+                break
+            elif ch == '\x08' or ch == '\x7f':  # Backspace / Delete
+                if chars:
+                    chars.pop()
+                    sys.stdout.write('\b \b')
+                    sys.stdout.flush()
+            elif ch == '\x03':  # Ctrl-C
+                raise KeyboardInterrupt
+            elif ch == '\x1a':  # Ctrl-Z (EOF on Windows)
+                break
+            else:
+                chars.append(ch)
+                sys.stdout.write('*')
+                sys.stdout.flush()
+    else:
+        # Unix (Linux / macOS): use termios for raw mode
+        try:
+            import tty
+            import termios
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                while True:
+                    ch = sys.stdin.read(1)
+                    if ch in ('\r', '\n', ''):
+                        sys.stdout.write('\n')
+                        sys.stdout.flush()
+                        break
+                    elif ch == '\x7f' or ch == '\x08':  # Backspace
+                        if chars:
+                            chars.pop()
+                            sys.stdout.write('\b \b')
+                            sys.stdout.flush()
+                    elif ch == '\x03':  # Ctrl-C
+                        sys.stdout.write('\n')
+                        sys.stdout.flush()
+                        raise KeyboardInterrupt
+                    elif ch == '\x04':  # Ctrl-D (EOF)
+                        sys.stdout.write('\n')
+                        sys.stdout.flush()
+                        break
+                    else:
+                        chars.append(ch)
+                        sys.stdout.write('*')
+                        sys.stdout.flush()
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except (ImportError, termios.error, ValueError):
+            # Fallback: no terminal available (piped stdin, etc.)
+            # Use getpass which also hides input
+            return getpass.getpass(prompt_text)
+
+    return ''.join(chars)
+
+
 def prompt(question: str, default: str = "", secret: bool = False, password: bool = False, required: bool = False) -> str:
     """
     Prompt user for input.
@@ -189,6 +267,8 @@ def prompt(question: str, default: str = "", secret: bool = False, password: boo
     while True:
         if password:
             value = getpass.getpass(prompt_text)
+        elif secret:
+            value = masked_input(prompt_text)
         else:
             value = input(prompt_text)
         
