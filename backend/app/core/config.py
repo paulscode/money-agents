@@ -160,20 +160,23 @@ class Settings(BaseSettings):
     acestep_api_url: str = "http://host.docker.internal:8001"  # ACE-Step API endpoint
     acestep_api_port: int = 8001  # ACE-Step API port
     acestep_api_key: Optional[str] = None  # API key for authentication
-    acestep_model: str = "turbo"  # DiT model: turbo (fast, 8 steps max) or base (slow, 300 steps max)
+    acestep_model: str = "turbo"  # DiT model: turbo, base, xl-turbo, xl-base, xl-sft
     acestep_auto_start: bool = True  # Auto-start ACE-Step server
     acestep_download_source: str = "auto"  # Model download source: auto, huggingface, modelscope
     
     @property
     def acestep_max_steps(self) -> int:
         """Get maximum inference steps based on model type."""
-        return 8 if self.acestep_model == "turbo" else 300
+        if self.acestep_model in ("turbo", "xl-turbo"):
+            return 8
+        return 300
     
     @property
     def acestep_default_steps(self) -> int:
         """Get default inference steps based on model type."""
-        # Turbo: always 8 (max), Base: 45 is balanced default (range 27-60)
-        return 8 if self.acestep_model == "turbo" else 45
+        if self.acestep_model in ("turbo", "xl-turbo"):
+            return 8
+        return 50 if self.acestep_model.startswith("xl") else 45
     
     # Qwen3-TTS Local Voice Generation
     use_qwen3_tts: bool = False  # Enable Qwen3-TTS voice generation

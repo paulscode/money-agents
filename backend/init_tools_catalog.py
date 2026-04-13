@@ -211,8 +211,8 @@ INPUT_SCHEMA_ACESTEP = {
         },
         "model": {
             "type": "string",
-            "description": "DiT model variant. Turbo: fast (8 steps, ~15s/min of audio). Base: slower but more diverse & stylistically controllable (27-60 steps, ~2-4min/min of audio). Both fit in 24GB VRAM.",
-            "enum": ["turbo", "base"],
+            "description": "DiT model variant. Turbo: fast (8 steps, ~15s/min of audio). Base: slower but more diverse (27-60 steps). XL variants use the 4B DiT decoder for higher quality but need more VRAM (>=16GB with offloading, >=20GB without). xl-turbo: fast XL (8 steps). xl-base: slower XL (50 steps). xl-sft: highest quality XL.",
+            "enum": ["turbo", "base", "xl-turbo", "xl-base", "xl-sft"],
             "default": "turbo"
         },
         "duration": {
@@ -224,7 +224,7 @@ INPUT_SCHEMA_ACESTEP = {
         },
         "steps": {
             "type": "integer",
-            "description": "Inference steps — controls quality vs speed. Turbo: fixed at 8 (always use 8, values >8 are clamped). Base: 27-60 recommended (default 45, max 300). Leave blank to use the model's default.",
+            "description": "Inference steps — controls quality vs speed. Turbo/xl-turbo: fixed at 8. Base: 27-60 recommended (default 45). XL-base/xl-sft: 30-60 recommended (default 50). Leave blank to use the model's default.",
             "minimum": 1
         },
         "instrumental": {

@@ -4,17 +4,21 @@ Post-install patch for ACE-Step: adds cooperative VRAM unload/reload support.
 
 ACE-Step is cloned from upstream (https://github.com/ace-step/ACE-Step-1.5)
 and gitignored.  This script is run automatically by start.py after cloning
-to add three capabilities the upstream code lacks:
+to add two capabilities the upstream code lacks:
 
   1. handler.py  – unload_models() method + is_initialized property
   2. api_server.py – POST /unload, POST /reload endpoints
-  3. api_server.py – GET /health now reports model_loaded status
-  4. api_server.py – Startup saves init params for /reload
 
-Without these, the only way to free AceStep's ~19 GB VRAM is to kill the
-process (and the backend cannot restart it).  With them, the GPU lifecycle
-service can cooperatively evict and later reload AceStep models, matching
-the pattern used by every other GPU tool.
+Without these, the only way to free AceStep's VRAM is to kill the process
+(and the backend cannot restart it).  With them, the GPU lifecycle service
+can cooperatively evict and later reload AceStep models, matching the
+pattern used by every other GPU tool.
+
+The upstream already provides:
+  - Path-traversal-safe /v1/audio (in api/http/audio_route.py)
+  - last_init_params stored on the handler
+  - /health with models_initialized status
+  - /v1/init for on-demand model initialization
 
 Usage:
     python scripts/patch_acestep.py [--acestep-dir PATH] [--force]
@@ -30,14 +34,12 @@ from pathlib import Path
 
 # Marker comment inserted into patched files so we can detect prior application
 PATCH_MARKER = "# MONEY-AGENTS-PATCH: cooperative-vram-unload"
-PATCH_VERSION = "1"  # Bump when patch content changes
+PATCH_VERSION = "3"  # v3: added /shutdown endpoint for Phase 2 VRAM eviction
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Handler patches
+# Handler patches  (handler.py — mixin-based since upstream refactor)
 # ─────────────────────────────────────────────────────────────────────────────
-
-HANDLER_IMPORT_PATCH = "import gc  " + PATCH_MARKER
 
 HANDLER_METHODS_PATCH = f'''
     {PATCH_MARKER} v{PATCH_VERSION}
@@ -51,6 +53,7 @@ HANDLER_METHODS_PATCH = f'''
         Returns:
             Status message
         """
+        import gc
         unloaded = []
         try:
             # Unload LoRA first if loaded
@@ -59,7 +62,8 @@ HANDLER_METHODS_PATCH = f'''
 
             # Delete all model components
             for attr_name in ("model", "vae", "text_encoder", "text_tokenizer",
-                              "silence_latent", "reward_model", "_base_decoder"):
+                              "silence_latent", "reward_model", "_base_decoder",
+                              "mlx_decoder", "mlx_vae"):
                 obj = getattr(self, attr_name, None)
                 if obj is not None:
                     # Move to CPU first to free GPU memory immediately
@@ -82,10 +86,12 @@ HANDLER_METHODS_PATCH = f'''
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
 
+            from loguru import logger
             logger.info(f"[unload_models] Unloaded: {{unloaded}}")
             return f"Models unloaded: {{', '.join(unloaded)}}"
 
         except Exception as e:
+            from loguru import logger
             logger.exception("[unload_models] Error during unload")
             return f"Error unloading models: {{str(e)}}"
 
@@ -97,36 +103,15 @@ HANDLER_METHODS_PATCH = f'''
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# API server patches
+# API server patches  (api_server.py — modular route architecture)
+#
+# We add /unload and /reload routes directly after configure_api_routes()
+# in create_app().  The handler already stores last_init_params natively.
 # ─────────────────────────────────────────────────────────────────────────────
 
-API_INIT_PARAMS_PATCH = f'''
-        {PATCH_MARKER} v{PATCH_VERSION}
-        # Store init params for /reload support
-        app.state._init_params = {{
-            "project_root": project_root,
-            "config_path": config_path,
-            "device": device,
-            "use_flash_attention": use_flash_attention,
-            "compile_model": False,
-            "offload_to_cpu": offload_to_cpu,
-            "offload_dit_to_cpu": offload_dit_to_cpu,
-        }}
-'''
-
-API_HEALTH_REPLACEMENT = f'''    {PATCH_MARKER} v{PATCH_VERSION}
-    @app.get("/health")
-    async def health_check():
-        """Health check endpoint for service status."""
-        model_loaded = getattr(app.state, "_initialized", False)
-        handler = getattr(app.state, "handler", None)
-        handler_ready = handler.is_initialized if handler else False
-        return _wrap_response({{
-            "status": "ok",
-            "service": "ACE-Step API",
-            "version": "1.0",
-            "model_loaded": model_loaded and handler_ready,
-        }})
+API_UNLOAD_RELOAD_ROUTES = f'''
+    {PATCH_MARKER} v{PATCH_VERSION}
+    # --- Cooperative VRAM management endpoints ---
 
     @app.post("/unload")
     async def unload_models():
@@ -152,31 +137,44 @@ API_HEALTH_REPLACEMENT = f'''    {PATCH_MARKER} v{PATCH_VERSION}
             msg = handler3.unload_models()
             results.append(f"handler3: {{msg}}")
 
+        # Unload LLM handler — check both app.state flag and handler's own flag
+        llm = getattr(app.state, "llm_handler", None)
+        llm_initialized = (
+            getattr(app.state, "_llm_initialized", False)
+            or (llm is not None and getattr(llm, "llm_initialized", False))
+        )
+        if llm and llm_initialized:
+            try:
+                llm.unload()
+                results.append("llm: unloaded")
+            except Exception as e:
+                results.append(f"llm: ERROR - {{e}}")
+        app.state._llm_initialized = False
+
         # Mark all as uninitialized
         app.state._initialized = False
         app.state._initialized2 = False
         app.state._initialized3 = False
         app.state._init_error = None
 
-        print(f"[API Server] Models unloaded via /unload endpoint")
-        return _wrap_response({{
-            "status": "unloaded",
-            "results": results,
-        }})
+        print("[API Server] Models unloaded via /unload endpoint")
+        return _wrap_response({{"status": "unloaded", "results": results}})
 
     @app.post("/reload")
     async def reload_models():
         """Reload models after they were unloaded via /unload.
 
-        Re-initializes all handlers using the same parameters from startup.
+        Re-initializes the primary handler using the stored init params.
         """
-        init_params = getattr(app.state, "_init_params", None)
-        if not init_params:
-            return _wrap_response(None, code=500, error="No init params stored - cannot reload")
+        import asyncio
 
         handler = getattr(app.state, "handler", None)
         if not handler:
             return _wrap_response(None, code=500, error="No handler available")
+
+        init_params = getattr(handler, "last_init_params", None)
+        if not init_params:
+            return _wrap_response(None, code=500, error="No init params stored - cannot reload")
 
         if getattr(app.state, "_initialized", False) and handler.is_initialized:
             return _wrap_response({{"status": "already_loaded", "message": "Models are already loaded"}})
@@ -185,109 +183,64 @@ API_HEALTH_REPLACEMENT = f'''    {PATCH_MARKER} v{PATCH_VERSION}
 
         # Reload primary handler
         try:
-            print(f"[API Server] Reloading primary model via /reload...")
-            status_msg, ok = handler.initialize_service(**init_params)
+            print("[API Server] Reloading primary model via /reload...")
+            loop = asyncio.get_running_loop()
+            status_msg, ok = await loop.run_in_executor(
+                getattr(app.state, "executor", None),
+                lambda: handler.initialize_service(**init_params),
+            )
             app.state._initialized = ok
             if ok:
-                results.append(f"handler1: loaded")
-                print(f"[API Server] Primary model reloaded successfully")
+                results.append("handler1: loaded")
+                print("[API Server] Primary model reloaded successfully")
             else:
                 app.state._init_error = status_msg
                 results.append(f"handler1: FAILED - {{status_msg}}")
-                print(f"[API Server] Primary model reload FAILED: {{status_msg}}")
         except Exception as e:
             app.state._initialized = False
             app.state._init_error = str(e)
             results.append(f"handler1: ERROR - {{e}}")
-            print(f"[API Server] Primary model reload ERROR: {{e}}")
 
-        # Reload secondary handler if it exists
-        handler2 = getattr(app.state, "handler2", None)
-        config_path2 = getattr(app.state, "_config_path2", "")
-        if handler2 and config_path2:
-            try:
-                params2 = {{**init_params, "config_path": config_path2}}
-                status_msg2, ok2 = handler2.initialize_service(**params2)
-                app.state._initialized2 = ok2
-                results.append(f"handler2: {{'loaded' if ok2 else 'FAILED'}}")
-            except Exception as e:
-                app.state._initialized2 = False
-                results.append(f"handler2: ERROR - {{e}}")
-
-        # Reload third handler if it exists
-        handler3 = getattr(app.state, "handler3", None)
-        config_path3 = getattr(app.state, "_config_path3", "")
-        if handler3 and config_path3:
-            try:
-                params3 = {{**init_params, "config_path": config_path3}}
-                status_msg3, ok3 = handler3.initialize_service(**params3)
-                app.state._initialized3 = ok3
-                results.append(f"handler3: {{'loaded' if ok3 else 'FAILED'}}")
-            except Exception as e:
-                app.state._initialized3 = False
-                results.append(f"handler3: ERROR - {{e}}")
+        # Reload secondary/third handlers if they exist
+        for idx, (h_attr, init_attr, cfg_attr) in enumerate([
+            ("handler2", "_initialized2", "_config_path2"),
+            ("handler3", "_initialized3", "_config_path3"),
+        ], start=2):
+            h = getattr(app.state, h_attr, None)
+            cfg = getattr(app.state, cfg_attr, "")
+            if h and cfg:
+                try:
+                    params = {{**init_params, "config_path": cfg}}
+                    s, ok = await loop.run_in_executor(
+                        getattr(app.state, "executor", None),
+                        lambda p=params: h.initialize_service(**p),
+                    )
+                    setattr(app.state, init_attr, ok)
+                    results.append(f"handler{{idx}}: {{'loaded' if ok else 'FAILED'}}")
+                except Exception as e:
+                    setattr(app.state, init_attr, False)
+                    results.append(f"handler{{idx}}: ERROR - {{e}}")
 
         any_loaded = getattr(app.state, "_initialized", False)
-        return _wrap_response({{
-            "status": "loaded" if any_loaded else "failed",
-            "results": results,
-        }})
+        return _wrap_response({{"status": "loaded" if any_loaded else "failed", "results": results}})
+
+    @app.post("/shutdown")
+    async def graceful_shutdown():
+        """Gracefully terminate the server process to fully release VRAM.
+
+        Used by the GPU lifecycle manager (Phase 2) when /unload alone
+        doesn't free CUDA context memory (~5 GB for nanovllm KV cache).
+        The service manager will restart the process on the next request.
+        """
+        import os, signal, threading
+        def _kill():
+            import time
+            time.sleep(0.5)
+            os.kill(os.getpid(), signal.SIGTERM)
+        threading.Thread(target=_kill, daemon=True).start()
+        print("[API Server] Shutdown requested via /shutdown endpoint")
+        return _wrap_response({{"status": "shutting_down"}})
 '''
-
-# Security: replacement for the /v1/audio endpoint to add path validation.
-# The upstream endpoint accepts an arbitrary `path` parameter with no
-# validation, allowing path-traversal attacks to read any file on disk.
-# This replacement restricts served files to the output directory.
-AUDIO_ENDPOINT_SAFE = f'''    {PATCH_MARKER} v{PATCH_VERSION}
-    @app.get("/v1/audio")
-    async def get_audio(path: str, _: None = Depends(verify_api_key)):
-        """Serve audio file by path (with path-traversal protection)."""
-        from fastapi.responses import FileResponse
-
-        # Resolve the output directory (where ACEStep writes generated audio)
-        _output_base = Path(os.getenv("ACESTEP_OUTPUT_DIR", "output")).resolve()
-
-        resolved = Path(path).resolve()
-        # Ensure the resolved path is within the output directory
-        if not str(resolved).startswith(str(_output_base) + os.sep) and resolved != _output_base:
-            raise HTTPException(status_code=403, detail="Access denied — path outside output directory")
-
-        if not resolved.exists():
-            raise HTTPException(status_code=404, detail="Audio file not found")
-
-        ext = resolved.suffix.lower()
-        media_types = {{
-            ".mp3": "audio/mpeg",
-            ".wav": "audio/wav",
-            ".flac": "audio/flac",
-            ".ogg": "audio/ogg",
-        }}
-        media_type = media_types.get(ext, "audio/mpeg")
-
-        return FileResponse(str(resolved), media_type=media_type)
-'''
-
-# Original pattern to find and replace
-AUDIO_ENDPOINT_ORIGINAL = (
-    '    @app.get("/v1/audio")\n'
-    '    async def get_audio(path: str, _: None = Depends(verify_api_key)):\n'
-    '        """Serve audio file by path."""\n'
-    '        from fastapi.responses import FileResponse\n'
-    '\n'
-    '        if not os.path.exists(path):\n'
-    '            raise HTTPException(status_code=404, detail=f"Audio file not found: {path}")\n'
-    '\n'
-    '        ext = os.path.splitext(path)[1].lower()\n'
-    '        media_types = {\n'
-    '            ".mp3": "audio/mpeg",\n'
-    '            ".wav": "audio/wav",\n'
-    '            ".flac": "audio/flac",\n'
-    '            ".ogg": "audio/ogg",\n'
-    '        }\n'
-    '        media_type = media_types.get(ext, "audio/mpeg")\n'
-    '\n'
-    '        return FileResponse(path, media_type=media_type)'
-)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -303,103 +256,121 @@ def is_already_patched(filepath: Path) -> bool:
         return False
 
 
+def _get_patch_version(filepath: Path) -> int:
+    """Return the patch version currently applied, or 0 if not patched."""
+    try:
+        content = filepath.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return 0
+    m = re.search(r"MONEY-AGENTS-PATCH.*?v(\d+)", content)
+    return int(m.group(1)) if m else 0
+
+
 def patch_handler(handler_path: Path, force: bool = False) -> bool:
     """Patch handler.py with unload_models() and is_initialized."""
     if not handler_path.exists():
         print(f"  WARNING: {handler_path} not found — skipping handler patch")
         return False
 
-    if is_already_patched(handler_path) and not force:
-        print(f"  handler.py already patched — skipping")
+    existing_version = _get_patch_version(handler_path)
+    if existing_version >= int(PATCH_VERSION) and not force:
+        print(f"  handler.py already patched (v{existing_version}) — skipping")
         return True
 
     content = handler_path.read_text(encoding="utf-8")
+
+    # Remove old patch content if upgrading
+    if PATCH_MARKER in content:
+        # Remove old unload_models and is_initialized blocks
+        lines = content.split("\n")
+        new_lines = []
+        skip = False
+        for line in lines:
+            if PATCH_MARKER in line:
+                skip = True
+                continue
+            if skip:
+                # End skip when we hit a non-indented line or a new def at same level
+                if line and not line.startswith(" ") and not line.startswith("\t"):
+                    skip = False
+                    new_lines.append(line)
+                elif line.startswith("    def ") and "unload_models" not in line and "is_initialized" not in line:
+                    skip = False
+                    new_lines.append(line)
+                # Skip lines that are part of the patched methods
+                continue
+            new_lines.append(line)
+        content = "\n".join(new_lines)
+
     changes = 0
 
-    # 1. Add "import gc" after the existing imports block
-    if "import gc" not in content:
-        # Insert after "import math" line
-        anchor = "import math\n"
-        if anchor in content:
-            content = content.replace(anchor, HANDLER_IMPORT_PATCH + "\n" + anchor, 1)
-            changes += 1
-        else:
-            print(f"  WARNING: Could not find 'import math' anchor in handler.py")
-
-    # 2. Add unload_models() and is_initialized before initialize_service()
+    # Add unload_models() and is_initialized at end of handler class
     if "def unload_models" not in content:
-        # Find the anchor: end of get_lora_status, before initialize_service
-        anchor = "    def initialize_service(\n"
-        if anchor in content:
-            content = content.replace(anchor, HANDLER_METHODS_PATCH + "\n" + anchor, 1)
-            changes += 1
-        else:
-            print(f"  WARNING: Could not find 'def initialize_service' anchor in handler.py")
+        # Append to the end of the file (handler.py ends after __init__)
+        content = content.rstrip() + "\n" + HANDLER_METHODS_PATCH + "\n"
+        changes += 1
 
     if changes > 0:
         handler_path.write_text(content, encoding="utf-8")
-        print(f"  handler.py patched ({changes} changes)")
-    return changes > 0 or is_already_patched(handler_path)
+        print(f"  handler.py patched ({changes} changes, v{PATCH_VERSION})")
+    return True
 
 
 def patch_api_server(api_path: Path, force: bool = False) -> bool:
-    """Patch api_server.py with /unload, /reload, enhanced /health, and init params."""
+    """Patch api_server.py with /unload and /reload endpoints."""
     if not api_path.exists():
         print(f"  WARNING: {api_path} not found — skipping api_server patch")
         return False
 
-    if is_already_patched(api_path) and not force:
-        print(f"  api_server.py already patched — skipping")
+    existing_version = _get_patch_version(api_path)
+    if existing_version >= int(PATCH_VERSION) and not force:
+        print(f"  api_server.py already patched (v{existing_version}) — skipping")
         return True
 
     content = api_path.read_text(encoding="utf-8")
+
+    # Remove old patch content if upgrading
+    if PATCH_MARKER in content:
+        # Remove everything from the patch marker to the end of the patched block
+        marker_idx = content.find(PATCH_MARKER)
+        if marker_idx >= 0:
+            # Find the start of the line containing the marker
+            line_start = content.rfind("\n", 0, marker_idx)
+            if line_start < 0:
+                line_start = 0
+            # Remove from there to end of file, then add back the return/app/main lines
+            pre_patch = content[:line_start]
+            # Find "    return app" after the marker — that's where we resume
+            return_idx = content.find("    return app", marker_idx)
+            if return_idx >= 0:
+                post_patch = content[return_idx:]
+                content = pre_patch + "\n\n" + post_patch
+            else:
+                # Fallback: just strip the old marker lines
+                content = "\n".join(
+                    line for line in content.split("\n")
+                    if PATCH_MARKER not in line
+                )
+
     changes = 0
 
-    # 1. Insert _init_params storage before initialize_service call
-    if "app.state._init_params" not in content:
-        # Anchor: the line that prints loading primary DiT model, right before initialize_service call
-        anchor = '        print(f"[API Server] Loading primary DiT model: {config_path}")\n'
+    # Insert /unload and /reload routes after configure_api_routes() call
+    if "def unload_models" not in content:
+        # Find the anchor: "    return app" at the end of create_app()
+        anchor = "    return app\n"
         if anchor in content:
             content = content.replace(
                 anchor,
-                anchor + API_INIT_PARAMS_PATCH,
+                API_UNLOAD_RELOAD_ROUTES + "\n" + anchor,
                 1,
             )
             changes += 1
         else:
-            print(f"  WARNING: Could not find DiT loading anchor in api_server.py")
-
-    # 2. Replace /health endpoint and add /unload + /reload
-    if "def unload_models" not in content:
-        # Find the original health endpoint block and replace it
-        health_pattern = (
-            '    @app.get("/health")\n'
-            '    async def health_check():\n'
-            '        """Health check endpoint for service status."""\n'
-            '        return _wrap_response({\n'
-            '            "status": "ok",\n'
-            '            "service": "ACE-Step API",\n'
-            '            "version": "1.0",\n'
-            '        })'
-        )
-        if health_pattern in content:
-            content = content.replace(health_pattern, API_HEALTH_REPLACEMENT, 1)
-            changes += 1
-        else:
-            print(f"  WARNING: Could not find original /health endpoint in api_server.py")
-            print(f"           The upstream code may have changed.")
-
-    # 3. Replace /v1/audio endpoint with path-traversal-safe version
-    if "path outside output directory" not in content:
-        if AUDIO_ENDPOINT_ORIGINAL in content:
-            content = content.replace(AUDIO_ENDPOINT_ORIGINAL, AUDIO_ENDPOINT_SAFE, 1)
-            changes += 1
-        else:
-            print(f"  WARNING: Could not find original /v1/audio endpoint in api_server.py")
+            print(f"  WARNING: Could not find 'return app' anchor in api_server.py")
 
     if changes > 0:
         api_path.write_text(content, encoding="utf-8")
-        print(f"  api_server.py patched ({changes} changes)")
+        print(f"  api_server.py patched ({changes} changes, v{PATCH_VERSION})")
     return changes > 0 or is_already_patched(api_path)
 
 

@@ -322,6 +322,51 @@ class ACEStepService:
     # Music Generation
     # =========================================================================
     
+    # Model name to ACE-Step config name mapping
+    MODEL_MAP = {
+        "turbo": "acestep-v15-turbo",
+        "base": "acestep-v15-base",
+        "xl-turbo": "acestep-v15-xl-turbo",
+        "xl-base": "acestep-v15-xl-base",
+        "xl-sft": "acestep-v15-xl-sft",
+    }
+
+    async def _ensure_model_loaded(self, model: str) -> None:
+        """Ensure the requested model is loaded in the ACE-Step server.
+
+        The upstream /release_task only routes among already-loaded handlers;
+        it does NOT auto-init missing models. This method checks the loaded
+        model inventory via /health and calls /v1/init if the target model
+        isn't loaded yet (e.g. switching from 2B turbo to 4B XL).
+        """
+        target = self.MODEL_MAP.get(model, model)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"{self.base_url}/health", headers=self.headers)
+                if resp.status_code != 200:
+                    return
+                health = resp.json().get("data", {})
+
+            # Check if already loaded in any slot
+            for m in health.get("models", []):
+                if m.get("name") == target and m.get("is_loaded"):
+                    return
+
+            # Model not loaded — init it (replaces slot 1)
+            logger.info(f"Model {target} not loaded, calling /v1/init...")
+            async with httpx.AsyncClient(timeout=300) as client:
+                resp = await client.post(
+                    f"{self.base_url}/v1/init",
+                    headers=self.headers,
+                    json={"model": target, "init_llm": True},
+                )
+                if resp.status_code == 200:
+                    logger.info(f"Model {target} loaded successfully")
+                else:
+                    logger.warning(f"Failed to init model {target}: {resp.text}")
+        except Exception as e:
+            logger.warning(f"Error ensuring model loaded: {e}")
+
     async def generate_music(
         self,
         *,
@@ -346,7 +391,7 @@ class ACEStepService:
             style: Music style/genre description
             duration: Duration in seconds (10-600)
             steps: Number of inference steps (None = use default for model)
-            model: DiT model variant: "turbo" or "base" (None = use server default)
+            model: DiT model variant: "turbo", "base", "xl-turbo", "xl-base", "xl-sft" (None = use server default)
             instrumental: Generate instrumental only
             temperature: Sampling temperature (0.7-1.5)
             guidance_scale: CFG scale (1.0-10.0)
@@ -361,18 +406,21 @@ class ACEStepService:
         if not await self.health_check():
             raise ACEStepError("ACE-Step server is not running")
         
-        # Resolve model-specific steps defaults and limits
-        is_base = (model == "base") if model else (self.model == "base")
-        max_steps = 300 if is_base else 8
-        default_steps = 45 if is_base else 8
+        # Ensure the requested model is loaded (handles XL model switching)
+        effective_model = model or self.model
+        await self._ensure_model_loaded(effective_model)
+        is_turbo = effective_model in ("turbo", "xl-turbo")
+        is_xl = effective_model.startswith("xl") if effective_model else False
+        is_base = not is_turbo
+        max_steps = 8 if is_turbo else 300
+        default_steps = 8 if is_turbo else (50 if is_xl else 45)
         
-        # Auto-adjust timeout for base model (much slower than turbo)
-        # Base model docs say ~2-4 min per minute of audio
+        # Auto-adjust timeout for base/XL models (much slower than turbo)
         if is_base and timeout <= 300:
-            # Scale timeout by duration: base needs ~4 min/min of audio + buffer
-            estimated_time = max(600, int(duration * 5) + 120)
+            # Scale timeout by duration: base/XL needs ~4 min/min of audio + buffer
+            estimated_time = max(600, int(duration * (7 if is_xl else 5)) + 120)
             timeout = max(timeout, estimated_time)
-            logger.info(f"Auto-adjusted timeout to {timeout}s for base model")
+            logger.info(f"Auto-adjusted timeout to {timeout}s for {effective_model} model")
         
         if steps is None:
             steps = default_steps
@@ -400,11 +448,7 @@ class ACEStepService:
         
         # Map user-facing model name to ACE-Step config name
         if model:
-            model_map = {
-                "turbo": "acestep-v15-turbo",
-                "base": "acestep-v15-base",
-            }
-            payload["model"] = model_map.get(model, model)
+            payload["model"] = self.MODEL_MAP.get(model, model)
         
         logger.info(f"Submitting music generation task: style='{style[:50]}...', duration={duration}s, steps={steps}")
         

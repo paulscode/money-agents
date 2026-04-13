@@ -1020,20 +1020,21 @@ def refresh_docker_dns():
 
 def create_admin_user(email: str, username: str, password: str) -> bool:
     """Create admin user via the backend container."""
-    # Pass credentials via environment variables to avoid command injection.
-    # The Python code reads from os.environ instead of f-string interpolation.
+    # GAP-3: Pass credentials via stdin (JSON) to avoid /proc exposure
     python_code = '''
 import asyncio
-import os
+import sys
+import json
 from sqlalchemy import select
 from app.core.database import get_session_maker
 from app.core.security import get_password_hash
 from app.models import User, UserRole
 
 async def create_admin():
-    email = os.environ["_ADMIN_EMAIL"]
-    username = os.environ["_ADMIN_USERNAME"]
-    password = os.environ["_ADMIN_PASSWORD"]
+    creds = json.loads(sys.stdin.read())
+    email = creds["email"]
+    username = creds["username"]
+    password = creds["password"]
     async with get_session_maker()() as db:
         # Check if user exists
         result = await db.execute(select(User).where(User.email == email))
@@ -1065,30 +1066,20 @@ async def create_admin():
 asyncio.run(create_admin())
 '''
     
-    # GAP-3: Use --env-file instead of -e flags to avoid /proc exposure
-    env_file = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".env", delete=False, prefix="ma_admin_"
+    import json as _json
+    stdin_data = _json.dumps({"email": email, "username": username, "password": password})
+    result = subprocess.run(
+        [
+            "docker", "compose", "exec", "-T",
+            "backend", "python", "-c", python_code,
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        input=stdin_data,
+        encoding="utf-8",
+        errors="replace"
     )
-    try:
-        os.chmod(env_file.name, 0o600)  # Restrict to owner-only
-        env_file.write(f"_ADMIN_EMAIL={email}\n")
-        env_file.write(f"_ADMIN_USERNAME={username}\n")
-        env_file.write(f"_ADMIN_PASSWORD={password}\n")
-        env_file.close()
-        result = subprocess.run(
-            [
-                "docker", "compose", "exec", "-T",
-                "--env-file", env_file.name,
-                "backend", "python", "-c", python_code,
-            ],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace"
-        )
-    finally:
-        os.unlink(env_file.name)
     
     output = result.stdout.strip()
     
@@ -1106,10 +1097,11 @@ asyncio.run(create_admin())
 
 def reset_admin_password(identifier: str, new_password: str) -> bool:
     """Reset admin password via the backend container."""
-    # Pass credentials via environment variables to avoid command injection.
+    # GAP-3: Pass credentials via stdin (JSON) to avoid /proc exposure
     python_code = '''
 import asyncio
-import os
+import sys
+import json
 from datetime import datetime, timezone
 from sqlalchemy import select, or_
 from app.core.database import get_session_maker
@@ -1117,8 +1109,9 @@ from app.core.security import get_password_hash
 from app.models import User
 
 async def reset_password():
-    identifier = os.environ["_RESET_IDENTIFIER"]
-    new_password = os.environ["_RESET_PASSWORD"]
+    creds = json.loads(sys.stdin.read())
+    identifier = creds["identifier"]
+    new_password = creds["password"]
     async with get_session_maker()() as db:
         result = await db.execute(
             select(User).where(
@@ -1140,29 +1133,20 @@ async def reset_password():
 asyncio.run(reset_password())
 '''
     
-    # GAP-3: Use --env-file instead of -e flags to avoid /proc exposure
-    env_file = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".env", delete=False, prefix="ma_reset_"
+    import json as _json
+    stdin_data = _json.dumps({"identifier": identifier, "password": new_password})
+    result = subprocess.run(
+        [
+            "docker", "compose", "exec", "-T",
+            "backend", "python", "-c", python_code,
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        input=stdin_data,
+        encoding="utf-8",
+        errors="replace"
     )
-    try:
-        os.chmod(env_file.name, 0o600)  # Restrict to owner-only
-        env_file.write(f"_RESET_IDENTIFIER={identifier}\n")
-        env_file.write(f"_RESET_PASSWORD={new_password}\n")
-        env_file.close()
-        result = subprocess.run(
-            [
-                "docker", "compose", "exec", "-T",
-                "--env-file", env_file.name,
-                "backend", "python", "-c", python_code,
-            ],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace"
-        )
-    finally:
-        os.unlink(env_file.name)
     
     output = result.stdout.strip()
     
@@ -2802,9 +2786,15 @@ def start_service_manager(env_values: Optional[Dict[str, str]] = None) -> Option
     
     print_info(f"Starting service manager on port {port}...")
     
+    # The service manager imports fastapi/uvicorn which aren't in the
+    # system Python.  Use the project .venv (created by start.py's own
+    # setup) which has these dependencies.
+    venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
+    sm_python = str(venv_python) if venv_python.exists() else sys.executable
+    
     try:
         proc = start_background_process(
-            [sys.executable, str(manager_script), "--port", str(port)],
+            [sm_python, str(manager_script), "--port", str(port)],
             cwd=str(PROJECT_ROOT),
         )
         _service_manager_proc = proc
@@ -2813,6 +2803,14 @@ def start_service_manager(env_values: Optional[Dict[str, str]] = None) -> Option
         import time
         for _attempt in range(10):
             time.sleep(1)
+            # If the process already exited, it crashed (e.g. missing deps)
+            if proc.poll() is not None:
+                print_warning(
+                    f"Service manager exited immediately (code {proc.returncode}). "
+                    f"Check that fastapi/uvicorn are installed in {sm_python}."
+                )
+                _service_manager_proc = None
+                return None
             if is_port_in_use(port):
                 print_info("Service manager started ✓")
                 configure_firewall_for_service(port, "Service Manager")
@@ -6374,6 +6372,7 @@ def run_start_application():
         
         # Start the host-side service manager (allows backend to
         # restart GPU services that were /shutdown for VRAM eviction)
+        print_section("Starting GPU Service Manager")
         start_service_manager(current_env)
         
         # Show consolidated firewall note if any services need rules

@@ -396,6 +396,23 @@ class GPULifecycleService:
             )
             free_before = _get_free_vram_mb(gpu_idx)
             shutdown_result = await self._force_shutdown_service(config, gpu_idx)
+            
+            # Fallback: if /shutdown returned 404 (unpatched service),
+            # ask the service manager to force-kill the process instead.
+            if shutdown_result.get("status") == "no_shutdown_endpoint":
+                logger.info(
+                    f"{service_name} has no /shutdown — falling back to "
+                    f"service-manager stop"
+                )
+                stopped = await self._service_manager_stop(service_name)
+                if stopped:
+                    await asyncio.sleep(3)
+                    free_now = _get_free_vram_mb(gpu_idx)
+                    freed = (free_now or 0) - (free_before or 0)
+                    shutdown_result = {"status": "stopped_via_manager", "freed_mb": freed}
+                else:
+                    shutdown_result = {"status": "stop_failed"}
+            
             results["evictions"][service_name]["shutdown"] = shutdown_result
             free_after = _get_free_vram_mb(gpu_idx)
             logger.info(
