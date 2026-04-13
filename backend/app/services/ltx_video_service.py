@@ -1,14 +1,14 @@
 """
-LTX-2 Video Service - Manages the LTX-2 native video generation server.
+LTX-2.3 Video Service - Manages the LTX-2.3 native video generation server.
 
 This service handles:
-- Setting up LTX-2 with its own venv + ltx-pipelines from git
-- Starting/stopping the LTX-2 FastAPI server
+- Setting up LTX-2.3 with its own venv + ltx-pipelines from git
+- Starting/stopping the LTX-2.3 FastAPI server
 - Health checks and status monitoring
 - Video generation via the local API
 
-Model: Lightricks LTX-2 19B Distilled FP8
-(https://huggingface.co/Lightricks/LTX-2)
+Model: Lightricks LTX-2.3 22B Distilled FP8
+(https://huggingface.co/Lightricks/LTX-2.3-fp8)
 """
 
 import asyncio
@@ -163,9 +163,9 @@ class LTXVideoService:
 
     async def _download_models(self) -> bool:
         """
-        Download LTX-2 model files (~77 GB) from HuggingFace.
+        Download LTX-2.3 model files (~78 GB) from HuggingFace.
 
-        Runs download_models.py inside the LTX-2 venv.
+        Runs download_models.py inside the LTX-2.3 venv.
         Does NOT fail the install if download fails — models can be retried later.
         """
         download_script = LTX_VIDEO_DIR / "download_models.py"
@@ -187,12 +187,12 @@ class LTXVideoService:
                 errors="replace", timeout=30,
             )
             if result.returncode == 0:
-                logger.info("All LTX-2 model files already present")
+                logger.info("All LTX-2.3 model files already present")
                 return True
         except Exception:
             pass
 
-        logger.info("Downloading LTX-2 model files from HuggingFace (~77 GB)...")
+        logger.info("Downloading LTX-2.3 model files from HuggingFace (~78 GB)...")
         try:
             result = subprocess.run(
                 [str(python_path), str(download_script)],
@@ -346,7 +346,7 @@ class LTXVideoService:
             "installed": await self.is_installed(),
             "running": is_healthy,
             "url": self.base_url,
-            "model": "ltx-2-19b-distilled-fp8",
+            "model": "ltx-2.3-22b-distilled",
         }
 
         if is_healthy:

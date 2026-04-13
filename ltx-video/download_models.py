@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-Download all required model files for LTX-2 Video Generation.
+Download all required model files for LTX-2.3 Video Generation.
 
-Downloads from HuggingFace (~42 GB total with FP8 Gemma):
-  - ltx-2-19b-distilled-fp8.safetensors  (27.1 GB) — Main DiT checkpoint
-  - ltx-2-spatial-upscaler-x2-1.0.safetensors (996 MB) — Spatial upscaler
-  - Gemma 3 12B FP8 text encoder         (13.2 GB) — Quantized text encoder (fits 24GB GPUs)
-  - Gemma tokenizer + config files       (~39 MB)  — Required for text encoding
+Downloads from HuggingFace (~96 GB total on disk):
+  - ltx-2.3-22b-distilled.safetensors     (46 GB) — DiT checkpoint (official bf16 weights)
+  - ltx-2.3-spatial-upscaler-x2-1.1.safetensors (~1 GB) — Spatial upscaler
+  - Gemma 3 12B text encoder weights        (~49 GB) — Text encoder (streamed on low-VRAM GPUs)
+  - Gemma tokenizer + config files           (~39 MB) — Required for text encoding
 
-Checkpoint and upscaler come from Lightricks/LTX-2.
-The FP8 Gemma text encoder comes from GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn.
+All files come from Lightricks/LTX-2.3.
 No gated-model access is required — no HuggingFace token needed.
 Resume is supported — interrupted downloads continue where they left off.
 
@@ -24,15 +23,14 @@ import argparse
 import sys
 from pathlib import Path
 
-REPO_ID = "Lightricks/LTX-2"
-FP8_GEMMA_REPO = "GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn"
-FP8_GEMMA_FILE = "gemma_3_12B_it_fp8_e4m3fn.safetensors"
-FP8_GEMMA_SUBDIR = "gemma-3-12b-fp8"  # inside model_dir
+REPO_ID = "Lightricks/LTX-2.3"
 
-# Files to download from repo root → models/ltx-2/
-SINGLE_FILES = [
-    ("ltx-2-19b-distilled-fp8.safetensors", "LTX-2 checkpoint (27.1 GB)"),
-    ("ltx-2-spatial-upscaler-x2-1.0.safetensors", "Spatial upscaler (996 MB)"),
+# Official bf16 checkpoint from Lightricks
+CHECKPOINT = "ltx-2.3-22b-distilled.safetensors"
+
+# Files to download from the main repo → models/ltx-2/
+UPSCALER_FILES = [
+    (REPO_ID, "ltx-2.3-spatial-upscaler-x2-1.1.safetensors", "Spatial upscaler v1.1 (~1 GB)"),
 ]
 
 # Selective patterns for Gemma text encoder → models/ltx-2/<gemma_dir>/
@@ -90,8 +88,13 @@ def check_models(model_dir: Path, gemma_dir_name: str) -> list:
     """
     missing = []
 
-    # Single-file checkpoints
-    for filename, desc in SINGLE_FILES:
+    # BF16 checkpoint (official weights from Lightricks)
+    ckpt_path = model_dir / CHECKPOINT
+    if not ckpt_path.exists():
+        missing.append((CHECKPOINT, "LTX-2.3 bf16 checkpoint (46 GB)", ckpt_path))
+
+    # Upscaler
+    for repo_id, filename, desc in UPSCALER_FILES:
         filepath = model_dir / filename
         if not filepath.exists():
             missing.append((filename, desc, filepath))
@@ -116,15 +119,6 @@ def check_models(model_dir: Path, gemma_dir_name: str) -> list:
             gemma_root / "tokenizer",
         ))
 
-    # FP8 quantized Gemma (preferred — fits 24GB GPUs)
-    fp8_path = model_dir / FP8_GEMMA_SUBDIR / FP8_GEMMA_FILE
-    if not fp8_path.exists():
-        missing.append((
-            "gemma_fp8",
-            "Gemma 3 12B FP8 text encoder (13.2 GB) — preferred for 24GB GPUs",
-            fp8_path,
-        ))
-
     return missing
 
 
@@ -140,18 +134,37 @@ def download_models(model_dir: Path, gemma_dir_name: str, force: bool = False, s
     gemma_root = model_dir / gemma_dir_name
     ok = True
 
-    # ---- 1. Single-file checkpoints ----
-    for filename, desc in SINGLE_FILES:
+    # ---- 1. BF16 checkpoint (direct download) ----
+    ckpt_path = model_dir / CHECKPOINT
+    if not force and ckpt_path.exists():
+        print(f"  ✓ LTX-2.3 bf16 checkpoint — already present")
+    else:
+        print(f"\n  Downloading bf16 checkpoint (46 GB)...")
+        print(f"  Source: {REPO_ID}")
+        try:
+            hf_hub_download(
+                repo_id=REPO_ID,
+                filename=CHECKPOINT,
+                local_dir=str(model_dir),
+            )
+            print(f"  ✓ bf16 checkpoint downloaded")
+        except Exception as e:
+            print(f"  ✗ Failed to download checkpoint: {e}")
+            ok = False
+
+    # ---- 2. Upscaler ----
+    for repo_id, filename, desc in UPSCALER_FILES:
         filepath = model_dir / filename
         if not force and filepath.exists():
             print(f"  ✓ {desc} — already present")
             continue
 
         print(f"\n  Downloading {desc}...")
+        print(f"  Source: {repo_id}")
         print(f"  Destination: {filepath}")
         try:
             hf_hub_download(
-                repo_id=REPO_ID,
+                repo_id=repo_id,
                 filename=filename,
                 local_dir=str(model_dir),
             )
@@ -160,13 +173,13 @@ def download_models(model_dir: Path, gemma_dir_name: str, force: bool = False, s
             print(f"  ✗ Failed to download {filename}: {e}")
             ok = False
 
-    # ---- 2. Gemma text encoder weights ----
+    # ---- 3. Gemma text encoder weights ----
     model_shards = sorted(gemma_root.rglob("model-*.safetensors")) if gemma_root.exists() else []
     need_weights = force or len(model_shards) < 11
 
     if need_weights and not skip_weights:
         print(f"\n  Downloading Gemma 3 12B text encoder weights (~49 GB)...")
-        print(f"  This is the text understanding model — loaded temporarily during encoding.")
+        print(f"  On low-VRAM GPUs (≤26 GB), layers stream through GPU one at a time.")
         print(f"  Destination: {gemma_root / 'text_encoder'}")
         try:
             snapshot_download(
@@ -183,7 +196,7 @@ def download_models(model_dir: Path, gemma_dir_name: str, force: bool = False, s
     else:
         print(f"  ✓ Gemma text encoder weights — already present ({len(model_shards)} shards)")
 
-    # ---- 3. Gemma tokenizer ----
+    # ---- 4. Gemma tokenizer ----
     tokenizer_model = gemma_root / "tokenizer" / "tokenizer.model"
     preprocessor_cfg = gemma_root / "tokenizer" / "preprocessor_config.json"
     need_tokenizer = force or not tokenizer_model.exists() or not preprocessor_cfg.exists()
@@ -203,32 +216,8 @@ def download_models(model_dir: Path, gemma_dir_name: str, force: bool = False, s
     else:
         print(f"  ✓ Gemma tokenizer — already present")
 
-    # ---- 4. FP8 quantized Gemma (preferred — half the size, fits 24GB GPUs) ----
-    fp8_dir = model_dir / FP8_GEMMA_SUBDIR
-    fp8_path = fp8_dir / FP8_GEMMA_FILE
-    if force or not fp8_path.exists():
-        if not skip_weights:
-            print(f"\n  Downloading FP8 Gemma text encoder (13.2 GB)...")
-            print(f"  Source: {FP8_GEMMA_REPO}")
-            print(f"  Destination: {fp8_path}")
-            try:
-                hf_hub_download(
-                    repo_id=FP8_GEMMA_REPO,
-                    filename=FP8_GEMMA_FILE,
-                    local_dir=str(fp8_dir),
-                )
-                print(f"  ✓ FP8 Gemma text encoder — done")
-            except Exception as e:
-                print(f"  ✗ Failed to download FP8 Gemma: {e}")
-                print(f"    (The fp32 text encoder can be used as fallback)")
-                ok = False
-        else:
-            print(f"  ⊘ Skipping FP8 Gemma weights (--skip-weights)")
-    else:
-        print(f"  ✓ FP8 Gemma text encoder — already present")
-
     if ok:
-        print(f"\n  ✅ All LTX-2 model files ready in {model_dir}")
+        print(f"\n  ✅ All LTX-2.3 model files ready in {model_dir}")
     else:
         print(f"\n  ⚠  Some downloads failed. Re-run to retry (resume supported).")
 
@@ -237,7 +226,7 @@ def download_models(model_dir: Path, gemma_dir_name: str, force: bool = False, s
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Download LTX-2 model files from HuggingFace"
+        description="Download LTX-2.3 model files from HuggingFace"
     )
     parser.add_argument(
         "--model-dir", type=str, default=None,
@@ -261,7 +250,7 @@ def main():
     if args.model_dir:
         model_dir = Path(args.model_dir).resolve()
 
-    print(f"LTX-2 Model Directory: {model_dir}")
+    print(f"LTX-2.3 Model Directory: {model_dir}")
     print(f"Gemma subdirectory:    {gemma_dir_name}")
 
     if args.check:

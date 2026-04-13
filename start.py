@@ -4949,28 +4949,28 @@ def install_ltx_video() -> bool:
             print_warning(f"ltx-pipelines install failed: {result.stderr[:500]}")
             return False
 
-        # Download model files (~77 GB total from Lightricks/LTX-2 HuggingFace)
+        # Download model files (~78 GB total from Lightricks/LTX-2.3 HuggingFace)
         if not download_ltx_video_models():
             print_warning("Model download failed or incomplete — you can retry later with:")
             print_warning(f"  {LTX_VIDEO_DIR / '.venv' / 'bin' / 'python'} {LTX_VIDEO_DIR / 'download_models.py'}")
             # Don't fail install — venv is set up, models can be downloaded later
 
-        print_info("LTX-2 Video installed successfully!")
+        print_info("LTX-2.3 Video installed successfully!")
         return True
 
     except subprocess.TimeoutExpired:
-        print_warning("LTX-2 Video installation timed out")
+        print_warning("LTX-2.3 Video installation timed out")
         return False
     except Exception as e:
-        print_warning(f"LTX-2 Video installation failed: {e}")
+        print_warning(f"LTX-2.3 Video installation failed: {e}")
         return False
 
 
 def download_ltx_video_models() -> bool:
     """
-    Download LTX-2 model files (~77 GB) from HuggingFace.
+    Download LTX-2.3 model files (~78 GB) from HuggingFace.
 
-    Runs download_models.py inside the LTX-2 venv (which has huggingface_hub).
+    Runs download_models.py inside the LTX-2.3 venv (which has huggingface_hub).
     Supports resume — interrupted downloads continue where they left off.
     """
     venv_dir = LTX_VIDEO_DIR / ".venv"
@@ -5118,12 +5118,12 @@ def collect_ltx_video_config(current_env: Dict[str, str], gpu_enabled: bool) -> 
 
     values = {}
 
-    print(f"{Colors.BOLD}LTX-2 19B - Free Local Video Generation{Colors.RESET}")
-    print(f"{Colors.DIM}LTX-2 is a state-of-the-art video generation model from Lightricks.")
+    print(f"{Colors.BOLD}LTX-2.3 22B - Free Local Video Generation{Colors.RESET}")
+    print(f"{Colors.DIM}LTX-2.3 is a state-of-the-art video generation model from Lightricks.")
     print(f"It generates high-quality 768x512 video with synchronized audio,")
     print(f"up to 10 seconds at 24fps, and runs completely locally - FREE and UNLIMITED!")
     print(f"")
-    print(f"{Colors.YELLOW}⚠️  IMPORTANT: LTX-2 requires ~24GB VRAM and ~30GB disk space for models.{Colors.RESET}")
+    print(f"{Colors.YELLOW}⚠️  IMPORTANT: LTX-2.3 requires ~24GB VRAM and ~80GB disk space for models.{Colors.RESET}")
     print(f"{Colors.DIM}Models must be downloaded manually from HuggingFace (see docs).{Colors.RESET}")
     print()
 
@@ -5136,16 +5136,16 @@ def collect_ltx_video_config(current_env: Dict[str, str], gpu_enabled: bool) -> 
         else:
             print(f"{Colors.YELLOW}⚠ No GPU detected{Colors.RESET}")
 
-    # Check VRAM requirements (~20-21GB peak for LTX-2 19B with sequential loading)
+    # Check VRAM requirements (~22-23GB peak for LTX-2.3 22B with layer streaming)
     if gpu_vram >= 24000:
         recommended = True
-        vram_note = "Sufficient VRAM for LTX-2 (~20-21GB peak)"
+        vram_note = "Sufficient VRAM for LTX-2.3 (~22-23GB peak)"
     elif gpu_vram >= 20000:
         recommended = True
-        vram_note = "Tight VRAM - should work for LTX-2 with sequential loading"
+        vram_note = "Tight VRAM - should work for LTX-2.3 with layer streaming"
     else:
         recommended = False
-        vram_note = "LTX-2 needs ~20-21GB VRAM (24GB GPU recommended)"
+        vram_note = "LTX-2.3 needs ~22-23GB VRAM (24GB GPU recommended)"
 
     if recommended:
         print(f"{Colors.GREEN}Recommended: Yes - {vram_note}{Colors.RESET}")
@@ -5157,7 +5157,7 @@ def collect_ltx_video_config(current_env: Dict[str, str], gpu_enabled: bool) -> 
     # Ask if user wants LTX-2
     current_use = current_env.get("USE_LTX_VIDEO", "false").lower() == "true"
     use_ltx = prompt_yes_no(
-        f"Enable LTX-2 video generation?",
+        f"Enable LTX-2.3 video generation?",
         default=current_use if current_use else recommended,
     )
     values["USE_LTX_VIDEO"] = "true" if use_ltx else "false"
@@ -5166,8 +5166,8 @@ def collect_ltx_video_config(current_env: Dict[str, str], gpu_enabled: bool) -> 
         # Model directory
         print(f"\n{Colors.BOLD}Model Directory{Colors.RESET}")
         print(f"{Colors.DIM}Directory where LTX-2 model files are stored.")
-        print(f"Expected files: ltx-2-19B-distilled-fp8.safetensors,")
-        print(f"gemma_3_12B_it_fp8_e4m3fn.safetensors, spatial_upscaler_2x.safetensors{Colors.RESET}")
+        print(f"Expected files: ltx-2.3-22b-distilled.safetensors,")
+        print(f"ltx-2.3-spatial-upscaler-x2-1.1.safetensors, gemma-3-12b/{Colors.RESET}")
         current_model_dir = current_env.get("LTX_VIDEO_MODEL_DIR", "./models/ltx-2")
         model_dir = prompt(
             "Model directory path",

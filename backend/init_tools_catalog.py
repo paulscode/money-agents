@@ -3210,15 +3210,15 @@ result = await tool_service.execute("realesrgan-cpu-upscaler", {
     # LTX-2 Video — Local Text-to-Video Generation with Audio
     "ltx_video_generation": {
         "condition": lambda: bool(settings.use_ltx_video),
-        "name": "LTX-2 Video Generation",
+        "name": "LTX-2.3 Video Generation",
         "slug": "ltx-video-generation",
         "category": ToolCategory.API,
-        "description": "FREE local video generation with synchronized audio using LTX-2 19B distilled FP8. Produces MP4 clips up to ~10 seconds at 768x512 resolution. Runs entirely on your GPU - UNLIMITED usage, NO API costs. PROMPTING: Write a single flowing paragraph (max 200 words) describing the scene chronologically. Use present-progressive verbs ('is walking', 'speaking'). Include: specific movements, character appearances (gender, clothing, hair, expressions), lighting, camera angles, environment details. Describe audio: background sounds, ambient noise, SFX, speech with exact dialogue in quotes and voice characteristics. Start directly with the action. Be specific and literal — think like a cinematographer. Prefix with 'Style: realistic with cinematic lighting.' or similar. Do NOT use timestamps, scene cuts, or preamble.",
+        "description": "FREE local video generation with synchronized audio using LTX-2.3 22B distilled FP8. Produces MP4 clips up to ~10 seconds at 768x512 resolution. Runs entirely on your GPU - UNLIMITED usage, NO API costs. PROMPTING: Write a single flowing paragraph (max 200 words) describing the scene chronologically. Use present-progressive verbs ('is walking', 'speaking'). Include: specific movements, character appearances (gender, clothing, hair, expressions), lighting, camera angles, environment details. Describe audio: background sounds, ambient noise, SFX, speech with exact dialogue in quotes and voice characteristics. Start directly with the action. Be specific and literal — think like a cinematographer. Prefix with 'Style: realistic with cinematic lighting.' or similar. Do NOT use timestamps, scene cuts, or preamble.",
         "tags": ["video", "generation", "ai", "local", "free", "gpu", "audio", "text-to-video", "ltx"],
         "usage_instructions": """# LTX-2 Video Generation
 
 ## Overview
-LTX-2 uses a 19B parameter distilled DiT model (FP8 quantized) with Gemma 3 12B text encoder
+LTX-2.3 uses a 22B parameter distilled DiT model (FP8 quantized) with Gemma 3 12B text encoder
 to generate videos with synchronized audio from text prompts. Two-stage pipeline: 8 steps at
 384x256, spatial upscale 2x, then 4 steps at 768x512. Includes audio generation.
 
@@ -3343,7 +3343,7 @@ async def create_social_clip():
         },
         "strengths": """- **FREE & UNLIMITED**: No API costs, generate as many videos as you want
 - **Synchronized audio**: Video and audio generated together in one pass
-- **19B model quality**: State-of-the-art distilled DiT architecture
+- **22B model quality**: State-of-the-art distilled DiT architecture
 - **Fast distilled inference**: 8+4 steps total (vs 40+ for non-distilled)
 - **Up to 10 seconds**: 241 frames at 24fps with audio
 - **Reproducible**: Seed control for deterministic output

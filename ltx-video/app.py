@@ -1,14 +1,15 @@
 """
-LTX-2 Native Video Generation Server
+LTX-2.3 Native Video Generation Server
 
 A standalone FastAPI server for text-to-video generation with synchronized audio
-using the LTX-2 19B distilled FP8 model via the official ltx-pipelines package.
+using the LTX-2.3 22B distilled FP8 model via the official ltx-pipelines package.
 
 Features:
-  - LTX-2 19B DiT (FP8 quantized, distilled 8+4 step schedule)
-  - Gemma 3 12B text encoder (sequential load/offload)
+  - LTX-2.3 22B DiT (FP8 quantized, distilled 8+4 step schedule)
+  - Gemma 3 12B text encoder (auto-managed lifecycle via building blocks)
   - 2x spatial latent upsampling (384×256 → 768×512)
   - Synchronized audio generation
+  - Layer streaming for low-VRAM GPUs (≤26 GB)
   - Lazy model loading with idle GPU memory unloading
   - Optional Ollama prompt enhancement (zero VRAM cost)
 
@@ -54,100 +55,15 @@ logger = logging.getLogger("ltx-video")
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # NOTE: Flash/CUTLASS SDPA backends are configured per-GPU in
-# _patch_ledger_for_fp8_gemma() — Flash Attention on Ampere+ (CC ≥ 8.0),
+# _configure_gpu_backends() — Flash Attention on Ampere+ (CC ≥ 8.0),
 # CUTLASS mem-efficient via bf16→fp16 cast on Turing (CC 7.x).
 # See _install_turing_fp16_attention() — patches F.scaled_dot_product_attention
 # globally so both the LTX transformer and Gemma text encoder benefit.
 
 
 # =============================================================================
-# FP8 Gemma Text Encoder — fits 24GB GPUs
+# Turing GPU Compatibility — bf16→fp16 SDPA cast
 # =============================================================================
-# The Diffusers-format Gemma 3 12B text encoder is stored in fp32 (~46GB on disk,
-# ~24GB at bf16 on GPU).  This overwhelms a 24GB card.
-#
-# Solution: use GitMylo's FP8 (e4m3fn) quantized Gemma (~13GB on disk, ~13GB on
-# GPU) which is what ComfyUI uses.  The file uses ComfyUI key-naming conventions,
-# so we define a custom SDOps mapping to translate them to what the ltx_core
-# AVGemmaTextEncoderModel expects.
-# =============================================================================
-
-def _build_fp8_gemma_sdops():
-    """Build SDOps that maps ComfyUI-format FP8 Gemma keys → pipeline model keys."""
-    from ltx_core.loader import KeyValueOperationResult
-    from ltx_core.loader.sd_ops import SDOps
-
-    return (
-        SDOps("FP8_GEMMA_TEXT_ENCODER_KEY_OPS")
-        # 1. Feature extractor (from main checkpoint — unchanged)
-        .with_matching(prefix="text_embedding_projection.", suffix="")
-        .with_replacement("text_embedding_projection.", "feature_extractor_linear.")
-        # 2. Embeddings connectors (from main checkpoint — unchanged)
-        .with_matching(prefix="model.diffusion_model.video_embeddings_connector.", suffix="")
-        .with_replacement("model.diffusion_model.video_embeddings_connector.", "embeddings_connector.")
-        .with_matching(prefix="model.diffusion_model.audio_embeddings_connector.", suffix="")
-        .with_replacement("model.diffusion_model.audio_embeddings_connector.", "audio_embeddings_connector.")
-        # 3. Language model:  FP8 has "model.layers.*", "model.embed_tokens.*", "model.norm.*"
-        #    → target "model.model.language_model.*"
-        #    IMPORTANT: We use specific matchers AND specific replacements to avoid
-        #    accidentally matching "model.diffusion_model.*" from the checkpoint and
-        #    to avoid "model." replacement triggering inside "vision_model." keys.
-        .with_matching(prefix="model.layers.", suffix="")
-        .with_matching(prefix="model.embed_tokens.", suffix="")
-        .with_matching(prefix="model.norm.", suffix="")
-        .with_replacement("model.layers.", "model.model.language_model.layers.")
-        .with_replacement("model.embed_tokens.", "model.model.language_model.embed_tokens.")
-        .with_replacement("model.norm.", "model.model.language_model.norm.")
-        # 4. Vision tower:  FP8 has "vision_model.*"  → target "model.model.vision_tower.vision_model.*"
-        .with_matching(prefix="vision_model.", suffix="")
-        .with_replacement("vision_model.", "model.model.vision_tower.vision_model.")
-        # 5. Multi-modal projector:  same key prefix in FP8 and Diffusers
-        .with_matching(prefix="multi_modal_projector.", suffix="")
-        .with_replacement("multi_modal_projector.", "model.model.multi_modal_projector.")
-        # 6. Shared embed_tokens → lm_head weight tying
-        .with_kv_operation(
-            operation=lambda key, value: [
-                KeyValueOperationResult(key, value),
-                KeyValueOperationResult("model.lm_head.weight", value),
-            ],
-            key_prefix="model.model.language_model.embed_tokens.weight",
-        )
-    )
-
-
-def _install_fp8_compute_hooks(model):
-    """
-    Register forward hooks on every nn.Linear with FP8 (float8_e4m3fn) weights.
-
-    Pre-hook:  temporarily upcast weight from float8_e4m3fn → bfloat16
-    Post-hook: restore original FP8 weight, freeing the bf16 copy
-
-    This keeps the model at ~13 GB on GPU (FP8) and only allocates one extra
-    bf16 weight copy (~200 MB) at a time during forward passes.  Peak GPU usage
-    is ~16 GB instead of ~25 GB for a full bf16 model.
-    """
-    import torch
-
-    count = 0
-    for module in model.modules():
-        if isinstance(module, torch.nn.Linear) and module.weight.dtype == torch.float8_e4m3fn:
-
-            def _pre_hook(mod, args):
-                # Save FP8 weight reference, upcast to bf16 for matmul
-                mod._weight_fp8_backup = mod.weight.data
-                mod.weight.data = mod._weight_fp8_backup.to(torch.bfloat16)
-
-            def _post_hook(mod, args, output):
-                # Restore FP8 weight — the bf16 copy becomes unreferenced → freed
-                mod.weight.data = mod._weight_fp8_backup
-                del mod._weight_fp8_backup
-                return output
-
-            module.register_forward_pre_hook(_pre_hook)
-            module.register_forward_hook(_post_hook)
-            count += 1
-
-    logger.info(f"  Installed FP8→bf16 forward hooks on {count} Linear modules")
 
 
 def _install_turing_fp16_attention():
@@ -208,103 +124,24 @@ def _install_turing_fp16_attention():
     logger.info("[compat] F.scaled_dot_product_attention patched: bf16→fp16 cast for CUTLASS mem-efficient SDPA")
 
 
-def _patch_ledger_for_fp8_gemma(pipeline, fp8_gemma_path: str):
-    """
-    Replace the text encoder builder in the pipeline's ModelLedger so it loads
-    from a single FP8 safetensors file (ComfyUI format) instead of the 11-shard
-    fp32 Diffusers format.
-
-    Strategy: keep FP8 weights on GPU (~13 GB) and upcast per-Linear during the
-    forward pass via hooks.  This avoids the ~25 GB bf16 model + ~20 GB forward
-    peak that overflows even 44 GB cards.
-    """
+def _configure_gpu_backends(device):
+    """Configure SDPA backends based on GPU compute capability."""
     import torch
-    from dataclasses import replace as dc_replace
-
-    from ltx_core.loader.single_gpu_model_builder import SingleGPUModelBuilder as Builder
-    from ltx_core.text_encoders.gemma import (
-        AVGemmaTextEncoderModelConfigurator,
-        module_ops_from_gemma_root,
-    )
-    from ltx_core.text_encoders.gemma.encoders.av_encoder import GEMMA_MODEL_OPS
-    from ltx_pipelines.utils import ModelLedger
-
-    ledger = pipeline.model_ledger
-    gemma_root = ledger.gemma_root_path
-
-    # Build module_ops the same way the original ledger does (tokenizer, etc.)
-    module_ops = module_ops_from_gemma_root(gemma_root)
-
-    # The main checkpoint path is needed for feature_extractor + connector weights
-    checkpoint_path = str(ledger.checkpoint_path)
-
-    fp8_sd_ops = _build_fp8_gemma_sdops()
-
-    # Replace the text_encoder_builder with one that points at the FP8 file
-    ledger.text_encoder_builder = Builder(
-        model_path=(checkpoint_path, fp8_gemma_path),
-        model_class_configurator=AVGemmaTextEncoderModelConfigurator,
-        model_sd_ops=fp8_sd_ops,
-        registry=ledger.registry,
-        module_ops=(GEMMA_MODEL_OPS, *module_ops),
-    )
-
-    gpu_device = pipeline.device
-
-    def _fp8_text_encoder(self):
-        """Build text encoder keeping FP8 weights on GPU (not cast to bf16)."""
-        if not hasattr(self, "text_encoder_builder"):
-            raise ValueError("Text encoder not initialized.")
-
-        logger.info("Loading FP8 text encoder (keep FP8 weights, ~13 GB on GPU)...")
-        t0 = time.time()
-
-        # Build on CPU with dtype=None → preserves original dtypes (FP8 + bf16 mix)
-        te = self.text_encoder_builder.build(
-            device=torch.device("cpu"), dtype=None
-        ).eval()
-        te.requires_grad_(False)  # no autograd overhead during inference
-
-        t_build = time.time() - t0
-        logger.info(f"  Text encoder built on CPU in {t_build:.1f}s")
-
-        # Install per-Linear hooks that upcast FP8→bf16 on the fly
-        _install_fp8_compute_hooks(te)
-
-        # Move to GPU — FP8 tensors stay FP8, bf16 stays bf16 (~13 GB total)
-        t1 = time.time()
-        te = te.to(gpu_device)
-        t_move = time.time() - t1
-
-        # Log GPU memory usage
-        gpu_idx = gpu_device.index if gpu_device.index is not None else 0
-        allocated = torch.cuda.memory_allocated(gpu_idx) / (1024 ** 3)
-        logger.info(
-            f"  Moved to {gpu_device} in {t_move:.1f}s "
-            f"(GPU allocated: {allocated:.2f} GiB)"
-        )
-
-        return te
-
-    ModelLedger.text_encoder = _fp8_text_encoder
-
-    # --- GPU compatibility: configure backends based on compute capability ---
     try:
         import torch.backends.cudnn
         import torch.backends.cuda as cuda_be
-        cc = torch.cuda.get_device_capability(gpu_device)
+        cc = torch.cuda.get_device_capability(device)
         if cc < (8, 0):
             # Turing (CC 7.x): no native bf16 Flash Attention.
-            # However, the CUTLASS mem-efficient backend DOES work on Turing
-            # with fp16 inputs.  We enable it and install a lightweight wrapper
-            # that casts bf16→fp16 around the SDPA call, giving us O(N) memory
-            # attention instead of O(N²) math fallback — saving ~4-10+ GiB.
+            # CUTLASS mem-efficient backend works on Turing with fp16 inputs.
+            # Install a lightweight wrapper that casts bf16→fp16 around SDPA,
+            # giving O(N) memory attention instead of O(N²) math fallback.
             torch.backends.cudnn.enabled = False
             cuda_be.enable_flash_sdp(False)       # Flash: Ampere+ only
             cuda_be.enable_mem_efficient_sdp(True) # CUTLASS: works on Turing w/ fp16
             _install_turing_fp16_attention()
             logger.info(
-                f"[compat] Turing GPU {gpu_device} (CC {cc[0]}.{cc[1]}): "
+                f"[compat] Turing GPU {device} (CC {cc[0]}.{cc[1]}): "
                 "cuDNN disabled, mem-efficient SDPA via bf16→fp16 cast"
             )
         else:
@@ -312,272 +149,12 @@ def _patch_ledger_for_fp8_gemma(pipeline, fp8_gemma_path: str):
             cuda_be.enable_flash_sdp(True)
             cuda_be.enable_mem_efficient_sdp(True)
             logger.info(
-                f"[compat] Ampere+ GPU {gpu_device} (CC {cc[0]}.{cc[1]}): "
+                f"[compat] Ampere+ GPU {device} (CC {cc[0]}.{cc[1]}): "
                 "Flash Attention + mem-efficient SDPA enabled"
             )
     except Exception as e:
         logger.warning(f"Could not configure GPU backends: {e}")
 
-    logger.info(f"Text encoder builder patched → FP8 Gemma ({fp8_gemma_path})")
-
-
-def _patch_pipeline_for_low_vram(pipeline):
-    """
-    Replace DistilledPipeline.__call__ with a VRAM-optimised version that never
-    keeps more than one large model on GPU at a time.
-
-    Stock flow loads video_encoder + transformer simultaneously (~21 GB),
-    leaving < 3 GB for activations on a 24 GB card — guaranteed OOM.
-
-    Optimised flow for **text-to-video** (images=[]):
-      1. text_encoder  → encode → free                     (our FP8 Gemma patch)
-      2. transformer   → Stage 1 denoising → keep on GPU   (~19 GB)
-      3. transformer → CPU, video_encoder + upsampler → GPU → upsample → free
-      4. transformer → GPU, Stage 2 denoising → free
-      5. video_decoder, audio_decoder, vocoder → decode → free
-
-    For image-to-video (images != []), the video_encoder is needed before
-    denoising for conditioning.  On 24 GB that path will still OOM — fall back
-    to the stock __call__ so nothing breaks.
-    """
-    import torch
-    from ltx_core.components.diffusion_steps import EulerDiffusionStep
-    from ltx_core.components.noisers import GaussianNoiser
-    from ltx_core.model.audio_vae import decode_audio as vae_decode_audio
-    from ltx_core.model.upsampler import upsample_video
-    from ltx_core.model.video_vae import decode_video as vae_decode_video
-    from ltx_core.text_encoders.gemma import encode_text
-    from ltx_core.types import LatentState, VideoPixelShape
-    from ltx_pipelines.utils.constants import (
-        DISTILLED_SIGMA_VALUES,
-        STAGE_2_DISTILLED_SIGMA_VALUES,
-    )
-    from ltx_pipelines.utils.helpers import (
-        assert_resolution,
-        cleanup_memory,
-        denoise_audio_video,
-        euler_denoising_loop,
-        generate_enhanced_prompt,
-        image_conditionings_by_replacing_latent,
-        simple_denoising_func,
-    )
-
-    # Keep the original __call__ for image-to-video fallback
-    _original_call = pipeline.__call__.__func__
-
-    def _low_vram_call(
-        self,
-        prompt,
-        seed,
-        height,
-        width,
-        num_frames,
-        frame_rate,
-        images,
-        tiling_config=None,
-        enhance_prompt=False,
-    ):
-        # --- Image-to-video: fall back to stock (needs video_encoder + transformer) ---
-        if images:
-            logger.info("[low-vram] Image conditioning detected — using stock pipeline")
-            return _original_call(
-                self, prompt, seed, height, width, num_frames,
-                frame_rate, images, tiling_config, enhance_prompt,
-            )
-
-        logger.info("[low-vram] Text-to-video on ≤24 GB — sequential component loading")
-        assert_resolution(height=height, width=width, is_two_stage=True)
-
-        generator = torch.Generator(device=self.device).manual_seed(seed)
-        noiser = GaussianNoiser(generator=generator)
-        stepper = EulerDiffusionStep()
-        dtype = torch.bfloat16
-
-        # Track GPU-resident models for cleanup on OOM
-        _gpu_refs = []
-
-        try:
-            # ---- Phase 1: Text encoding (handled by our FP8 Gemma patch) ----
-            text_encoder = self.model_ledger.text_encoder()
-            _gpu_refs.append("text_encoder")
-            if enhance_prompt:
-                prompt = generate_enhanced_prompt(
-                    text_encoder, prompt,
-                    images[0][0] if len(images) > 0 else None,
-                )
-            context_p = encode_text(text_encoder, prompts=[prompt])[0]
-            video_context, audio_context = context_p
-            torch.cuda.synchronize()
-            del text_encoder
-            _gpu_refs.clear()
-            cleanup_memory()
-            logger.info("[low-vram] Text encoder freed")
-
-            # ---- Phase 2: Stage 1 denoising (transformer only on GPU) -------
-            transformer = self.model_ledger.transformer()
-            _gpu_refs.append("transformer")
-            stage_1_sigmas = torch.Tensor(DISTILLED_SIGMA_VALUES).to(self.device)
-
-            def denoising_loop(sigmas, video_state, audio_state, stepper):
-                return euler_denoising_loop(
-                    sigmas=sigmas,
-                    video_state=video_state,
-                    audio_state=audio_state,
-                    stepper=stepper,
-                    denoise_fn=simple_denoising_func(
-                        video_context=video_context,
-                        audio_context=audio_context,
-                        transformer=transformer,
-                    ),
-                )
-
-            stage_1_shape = VideoPixelShape(
-                batch=1, frames=num_frames,
-                width=width // 2, height=height // 2, fps=frame_rate,
-            )
-            # No image conditionings for text-to-video
-            stage_1_conditionings = []
-
-            logger.info("[low-vram] Stage 1 denoising (transformer only)...")
-            video_state, audio_state = denoise_audio_video(
-                output_shape=stage_1_shape,
-                conditionings=stage_1_conditionings,
-                noiser=noiser,
-                sigmas=stage_1_sigmas,
-                stepper=stepper,
-                denoising_loop_fn=denoising_loop,
-                components=self.pipeline_components,
-                dtype=dtype,
-                device=self.device,
-            )
-            logger.info("[low-vram] Stage 1 complete")
-
-            # ---- Phase 3: Upsample (transformer→CPU, encoder+upsampler→GPU) -
-            torch.cuda.synchronize()
-            transformer_cpu = transformer.to("cpu")
-            del transformer
-            _gpu_refs.clear()
-            cleanup_memory()
-            logger.info("[low-vram] Transformer offloaded to CPU for upsampling")
-
-            video_encoder = self.model_ledger.video_encoder()
-            upsampler = self.model_ledger.spatial_upsampler()
-            _gpu_refs.extend(["video_encoder", "upsampler"])
-            upscaled_video_latent = upsample_video(
-                latent=video_state.latent[:1],
-                video_encoder=video_encoder,
-                upsampler=upsampler,
-            )
-
-            torch.cuda.synchronize()
-            del video_encoder, upsampler
-            _gpu_refs.clear()
-            cleanup_memory()
-            logger.info("[low-vram] Upsample done, encoder+upsampler freed")
-
-            # ---- Phase 4: Stage 2 denoising (transformer back to GPU) -------
-            transformer = transformer_cpu.to(self.device)
-            del transformer_cpu
-            _gpu_refs.append("transformer")
-            cleanup_memory()
-            logger.info("[low-vram] Transformer reloaded to GPU for Stage 2")
-
-            # Rebuild denoising_loop closure with fresh transformer reference
-            def denoising_loop_s2(sigmas, video_state, audio_state, stepper):
-                return euler_denoising_loop(
-                    sigmas=sigmas,
-                    video_state=video_state,
-                    audio_state=audio_state,
-                    stepper=stepper,
-                    denoise_fn=simple_denoising_func(
-                        video_context=video_context,
-                        audio_context=audio_context,
-                        transformer=transformer,
-                    ),
-                )
-
-            stage_2_sigmas = torch.Tensor(STAGE_2_DISTILLED_SIGMA_VALUES).to(self.device)
-            stage_2_shape = VideoPixelShape(
-                batch=1, frames=num_frames,
-                width=width, height=height, fps=frame_rate,
-            )
-            stage_2_conditionings = []  # No image conditionings
-
-            logger.info("[low-vram] Stage 2 denoising (full resolution)...")
-            video_state, audio_state = denoise_audio_video(
-                output_shape=stage_2_shape,
-                conditionings=stage_2_conditionings,
-                noiser=noiser,
-                sigmas=stage_2_sigmas,
-                stepper=stepper,
-                denoising_loop_fn=denoising_loop_s2,
-                components=self.pipeline_components,
-                dtype=dtype,
-                device=self.device,
-                noise_scale=stage_2_sigmas[0],
-                initial_video_latent=upscaled_video_latent,
-                initial_audio_latent=audio_state.latent,
-            )
-
-            torch.cuda.synchronize()
-            del transformer
-            _gpu_refs.clear()
-            # Free all intermediate tensors — keep only final latents
-            del upscaled_video_latent, video_context, audio_context
-            del stage_1_sigmas, stage_2_sigmas
-            cleanup_memory()
-            logger.info("[low-vram] Stage 2 complete, transformer freed")
-
-            # ---- Phase 5: Decode video + audio ----
-            # vae_decode_video returns a LAZY ITERATOR — actual decode happens
-            # when encode_video consumes it in _generate_sync.  The iterator
-            # captures the decoder model, so we can't free it here.
-            # Audio decode is also deferred.  Both run under torch.no_grad()
-            # in _generate_sync to avoid activation memory bloat.
-            video_latent = video_state.latent
-            audio_latent = audio_state.latent
-            del video_state, audio_state
-            cleanup_memory()
-
-            decoded_video = vae_decode_video(
-                video_latent,
-                self.model_ledger.video_decoder(),
-                tiling_config,
-                generator,
-            )
-            decoded_audio = vae_decode_audio(
-                audio_latent,
-                self.model_ledger.audio_decoder(),
-                self.model_ledger.vocoder(),
-            )
-            logger.info("[low-vram] Decode iterators ready")
-            return decoded_video, decoded_audio
-
-        except Exception:
-            # Emergency GPU cleanup — free whatever's resident
-            logger.warning("[low-vram] Error during generation — cleaning up GPU")
-            for name in list(locals().keys()):
-                obj = locals().get(name)
-                if obj is not None and hasattr(obj, "parameters"):
-                    try:
-                        del obj
-                    except Exception:
-                        pass
-            cleanup_memory()
-            raise
-
-    # Patch the CLASS, not the instance — Python resolves dunder methods
-    # (__call__) on the type, ignoring instance-level overrides.
-    from ltx_pipelines.distilled import DistilledPipeline
-    DistilledPipeline.__call__ = _low_vram_call
-
-    # Check VRAM and log
-    gpu_idx = pipeline.device.index or 0
-    total_vram = torch.cuda.get_device_properties(gpu_idx).total_memory / (1024**3)
-    logger.info(
-        f"[low-vram] Pipeline patched for sequential loading "
-        f"(GPU {gpu_idx}: {total_vram:.0f} GB)"
-    )
 
 
 # =============================================================================
@@ -619,13 +196,15 @@ CONFIG = load_config()
 
 class ModelManager:
     """
-    Manages LTX-2 model lifecycle with lazy loading and idle unloading.
+    Manages LTX-2.3 model lifecycle with lazy loading and idle unloading.
 
     Uses the official ltx-pipelines DistilledPipeline which handles:
-    - Sequential component loading (Gemma → DiT → VAE)
-    - Automatic memory cleanup between stages
-    - FP8 transformer support
-    - Two-stage distilled inference (8 steps + 4 steps)
+    - Building blocks (PromptEncoder, DiffusionStage, etc.) that auto-manage
+      model lifecycle — each block loads its model, uses it, then frees GPU memory
+    - `streaming_prefetch_count` for low-VRAM GPUs (≤26 GB) — streams transformer
+      and text encoder layers through GPU one batch at a time
+    - BF16 dequantized checkpoint (fp8 weights pre-multiplied by weight_scale)
+    - Two-stage distilled inference (8 steps + 3 steps)
     """
 
     def __init__(self, config: dict):
@@ -633,8 +212,10 @@ class ModelManager:
         self._pipeline = None
         self._lock = asyncio.Lock()
         self._last_used = 0.0
+        self._in_use = 0  # active generation count — blocks idle unload
         self._idle_timeout = config.get("memory", {}).get("idle_timeout", 300)
         self._unload_task: Optional[asyncio.Task] = None
+        self._streaming_prefetch_count: Optional[int] = None
 
         # Resolve model directory
         model_config = config.get("model", {})
@@ -643,8 +224,8 @@ class ModelManager:
         if not self._model_dir.is_absolute():
             self._model_dir = (SCRIPT_DIR / self._model_dir).resolve()
 
-        self._checkpoint = model_config.get("checkpoint", "ltx-2-19b-distilled-fp8.safetensors")
-        self._spatial_upsampler = model_config.get("spatial_upsampler", "ltx-2-spatial-upscaler-x2-1.0.safetensors")
+        self._checkpoint = model_config.get("checkpoint", "ltx-2.3-22b-distilled.safetensors")
+        self._spatial_upsampler = model_config.get("spatial_upsampler", "ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
         self._gemma_dir = model_config.get("gemma_dir", "gemma-3-12b")
 
         # Select GPU: default cuda:0, overridable via config cuda_device
@@ -673,12 +254,19 @@ class ModelManager:
         async with self._lock:
             if self._pipeline is None:
                 await self._load_model()
+            self._in_use += 1
             self._last_used = time.time()
             self._schedule_idle_unload()
             return self._pipeline
 
+    def release_pipeline(self):
+        """Mark pipeline as no longer in active use and reschedule idle unload."""
+        self._in_use = max(0, self._in_use - 1)
+        self._last_used = time.time()
+        self._schedule_idle_unload()
+
     async def _load_model(self):
-        """Load LTX-2 DistilledPipeline."""
+        """Load LTX-2.3 DistilledPipeline."""
         import torch
 
         checkpoint_path = self._model_dir / self._checkpoint
@@ -697,10 +285,10 @@ class ModelManager:
         if missing:
             raise RuntimeError(
                 f"Missing model files: {', '.join(missing)}. "
-                f"Download from https://huggingface.co/Lightricks/LTX-2"
+                f"Download from https://huggingface.co/Lightricks/LTX-2.3-fp8"
             )
 
-        logger.info(f"Loading LTX-2 DistilledPipeline from {self._model_dir}...")
+        logger.info(f"Loading LTX-2.3 DistilledPipeline from {self._model_dir}...")
         start = time.time()
 
         try:
@@ -724,38 +312,40 @@ class ModelManager:
         """Synchronous pipeline loading — runs in thread pool."""
         import torch
         from ltx_pipelines.distilled import DistilledPipeline
-        from ltx_core.quantization import QuantizationPolicy
 
         device = torch.device(self._device)
 
+        # Configure GPU SDPA backends before loading the pipeline
+        _configure_gpu_backends(device)
+
         pipeline = DistilledPipeline(
-            checkpoint_path=checkpoint_path,
+            distilled_checkpoint_path=checkpoint_path,
             spatial_upsampler_path=upsampler_path,
             gemma_root=gemma_root,
             loras=[],
             device=device,
-            quantization=QuantizationPolicy.fp8_cast(),
         )
 
-        # Use the FP8 Gemma text encoder if available (~13GB vs ~46GB fp32)
-        fp8_gemma_dir = self._model_dir / "gemma-3-12b-fp8"
-        fp8_gemma_path = fp8_gemma_dir / "gemma_3_12B_it_fp8_e4m3fn.safetensors"
-        if fp8_gemma_path.exists():
-            _patch_ledger_for_fp8_gemma(pipeline, str(fp8_gemma_path))
-        else:
-            logger.warning(
-                "FP8 Gemma not found — using fp32 text encoder. "
-                "For 24GB GPUs, download from "
-                "https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn"
-            )
-
-        # Apply VRAM-optimised sequential loading on cards ≤ 26 GB.
-        # The FP8 transformer alone is ~19 GB so we can't keep it + video_encoder
-        # on GPU simultaneously.  The patch sequences component load/offload.
+        # Determine streaming prefetch count based on VRAM.
+        # The Gemma 3 12B text encoder in fp32 is ~46 GB, so it won't fit fully
+        # on any GPU with less than ~48 GB VRAM.  The upstream building blocks
+        # support layer streaming: models are built on CPU and layers are streamed
+        # to GPU one batch at a time, keeping GPU usage manageable.
+        # On 80 GB+ cards, disable streaming for speed.
         gpu_idx = device.index if device.index is not None else 0
         total_gb = torch.cuda.get_device_properties(gpu_idx).total_memory / (1024**3)
-        if total_gb <= 26:
-            _patch_pipeline_for_low_vram(pipeline)
+        if total_gb < 48:
+            self._streaming_prefetch_count = 2
+            logger.info(
+                f"[streaming] GPU {gpu_idx} has {total_gb:.0f} GB — "
+                f"layer streaming enabled (prefetch={self._streaming_prefetch_count})"
+            )
+        else:
+            self._streaming_prefetch_count = None
+            logger.info(
+                f"[streaming] GPU {gpu_idx} has {total_gb:.0f} GB — "
+                "full model loading (no streaming)"
+            )
 
         return pipeline
 
@@ -765,7 +355,7 @@ class ModelManager:
             if self._pipeline is not None:
                 import torch
 
-                logger.info("Unloading LTX-2 pipeline to free GPU memory...")
+                logger.info("Unloading LTX-2.3 pipeline to free GPU memory...")
                 del self._pipeline
                 self._pipeline = None
                 gc.collect()
@@ -783,6 +373,8 @@ class ModelManager:
 
         async def _check_and_unload():
             await asyncio.sleep(self._idle_timeout)
+            if self._in_use > 0:
+                return  # generation in progress — skip unload
             if time.time() - self._last_used >= self._idle_timeout:
                 logger.info(f"Idle timeout ({self._idle_timeout}s) reached, unloading...")
                 await self.unload_model()
@@ -928,21 +520,21 @@ async def lifespan(app: FastAPI):
     """Application lifespan — initialize model manager."""
     global model_manager
     model_manager = ModelManager(CONFIG)
-    logger.info("LTX-2 video server starting...")
+    logger.info("LTX-2.3 video server starting...")
     yield
-    logger.info("LTX-2 video server shutting down...")
+    logger.info("LTX-2.3 video server shutting down...")
     if model_manager and model_manager.is_loaded:
         await model_manager.unload_model()
 
 
 app = FastAPI(
-    title="LTX-2 Video Server",
+    title="LTX-2.3 Video Server",
     description=(
-        "Native LTX-2 19B distilled FP8 video generation server — "
+        "Native LTX-2.3 22B distilled FP8 video generation server — "
         "text-to-video with synchronized audio, lazy model loading, "
         "and idle GPU unloading"
     ),
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -1017,12 +609,13 @@ async def info():
     try:
         import torch
         if torch.cuda.is_available():
-            props = torch.cuda.get_device_properties(0)
+            gpu_idx = int(model_manager._device.split(":")[-1]) if "cuda" in model_manager._device else 0
+            props = torch.cuda.get_device_properties(gpu_idx)
             gpu_info = {
                 "name": props.name,
                 "vram_total_mb": props.total_memory // (1024 * 1024),
                 "vram_free_mb": (
-                    props.total_memory - torch.cuda.memory_allocated(0)
+                    props.total_memory - torch.cuda.memory_allocated(gpu_idx)
                 ) // (1024 * 1024),
             }
     except Exception:
@@ -1031,8 +624,8 @@ async def info():
     defaults = CONFIG.get("defaults", {})
     return {
         "model_loaded": model_manager.is_loaded,
-        "model": "ltx-2-19b-distilled-fp8",
-        "text_encoder": "gemma-3-12b-fp8",
+        "model": "ltx-2.3-22b-distilled",
+        "text_encoder": "gemma-3-12b",
         "pipeline": "DistilledPipeline",
         "stages": "2 (8 steps + 4 steps)",
         "device": model_manager._device,
@@ -1125,26 +718,31 @@ async def generate(request: GenerateRequest):
     try:
         pipeline = await model_manager.get_pipeline()
 
-        # Run generation in thread pool (blocking GPU work)
-        loop = asyncio.get_event_loop()
+        try:
+            # Run generation in thread pool (blocking GPU work)
+            loop = asyncio.get_event_loop()
 
-        with _name_lock:
-            filename = _next_unique_name()
-        output_path = OUTPUT_DIR / filename
+            with _name_lock:
+                filename = _next_unique_name()
+            output_path = OUTPUT_DIR / filename
 
-        await loop.run_in_executor(
-            None,
-            lambda: _generate_sync(
-                pipeline,
-                prompt=prompt,
-                seed=seed,
-                height=request.height,
-                width=request.width,
-                num_frames=request.num_frames,
-                frame_rate=float(request.fps),
-                output_path=str(output_path),
-            ),
-        )
+            await loop.run_in_executor(
+                None,
+                lambda: _generate_sync(
+                    pipeline,
+                    prompt=prompt,
+                    seed=seed,
+                    height=request.height,
+                    width=request.width,
+                    num_frames=request.num_frames,
+                    frame_rate=float(request.fps),
+                    output_path=str(output_path),
+                    streaming_prefetch_count=model_manager._streaming_prefetch_count,
+                    device=model_manager._device,
+                ),
+            )
+        finally:
+            model_manager.release_pipeline()
 
         elapsed = time.time() - start_time
         duration_seconds = round(request.num_frames / request.fps, 2)
@@ -1186,7 +784,7 @@ async def generate(request: GenerateRequest):
             has_audio=True,
             inference_time=round(elapsed, 2),
             seed=seed,
-            model="ltx-2-19b-distilled-fp8",
+            model="ltx-2.3-22b-distilled",
         )
 
     except HTTPException:
@@ -1222,12 +820,17 @@ def _generate_sync(
     num_frames: int,
     frame_rate: float,
     output_path: str,
+    streaming_prefetch_count: int | None = None,
+    device: str = "cuda:0",
 ):
     """Synchronous video generation — runs in thread pool."""
     import torch
     from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number
-    from ltx_pipelines.utils.constants import AUDIO_SAMPLE_RATE
     from ltx_pipelines.utils.media_io import encode_video
+
+    # Ensure correct CUDA device in worker thread (thread pool doesn't inherit device context)
+    if device.startswith("cuda:"):
+        torch.cuda.set_device(int(device.split(":")[-1]))
 
     tiling_config = TilingConfig.default()
     video_chunks_number = get_video_chunks_number(num_frames, tiling_config)
@@ -1235,20 +838,10 @@ def _generate_sync(
     logger.info(
         f"Starting generation: {width}x{height}, {num_frames} frames, "
         f"seed={seed}, frame_rate={frame_rate}"
+        + (f", streaming_prefetch={streaming_prefetch_count}" if streaming_prefetch_count else "")
     )
 
-    # CRITICAL: no_grad() prevents autograd from retaining intermediate
-    # tensors across all 48+ transformer blocks.  Without it the denoising loop
-    # consumes ~24 GiB of activation memory on top of the ~19 GiB model weights,
-    # overflowing even 44 GB cards.  The official CLI uses @torch.inference_mode()
-    # but we use no_grad() because some pipeline tensors are reused across stages
-    # and inference_mode tensors can't participate in autograd at all.
-    # NOTE: encode_video MUST be inside no_grad() too — vae_decode_video returns
-    # a lazy iterator, and the actual VAE decode runs when encode_video consumes
-    # it.  Running that outside no_grad() doubles activation memory.
     with torch.no_grad():
-        # Call the DistilledPipeline
-        # Returns (Iterator[torch.Tensor], torch.Tensor) = (video_chunks, audio)
         video, audio = pipeline(
             prompt=prompt,
             seed=seed,
@@ -1256,19 +849,18 @@ def _generate_sync(
             width=width,
             num_frames=num_frames,
             frame_rate=frame_rate,
-            images=[],  # Empty = text-to-video (no image conditioning)
+            images=[],
             tiling_config=tiling_config,
-            enhance_prompt=False,  # We handle enhancement ourselves via Ollama
+            enhance_prompt=False,
+            streaming_prefetch_count=streaming_prefetch_count,
         )
 
         logger.info("Encoding video + audio to MP4...")
 
-        # Encode the video chunks and audio into an MP4 file
         encode_video(
             video=video,
             fps=frame_rate,
             audio=audio,
-            audio_sample_rate=AUDIO_SAMPLE_RATE,
             output_path=output_path,
             video_chunks_number=video_chunks_number,
         )
@@ -1301,7 +893,7 @@ if __name__ == "__main__":
     import argparse
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="LTX-2 Video Generation Server")
+    parser = argparse.ArgumentParser(description="LTX-2.3 Video Generation Server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument(
         "--port",

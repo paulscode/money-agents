@@ -2570,7 +2570,7 @@ class ToolExecutor:
         Execute LTX-2 local video generation with synchronized audio.
 
         Generates MP4 video clips (up to ~10s) from text prompts using the
-        LTX-2 19B distilled FP8 model. FREE and UNLIMITED — runs on your own GPU.
+        LTX-2.3 22B distilled FP8 model. FREE and UNLIMITED — runs on your own GPU.
 
         Parameters:
             prompt (str, required): Detailed scene description for video generation.
@@ -2633,12 +2633,12 @@ class ToolExecutor:
                     "has_audio": result.get("has_audio", True),
                     "seed": result.get("seed"),
                     "inference_time": result.get("inference_time"),
-                    "model": result.get("model", "ltx-2-19b-distilled-fp8"),
+                    "model": result.get("model", "ltx-2.3-22b-distilled"),
                     "note": "Video generated successfully. Use video_url to access the MP4 file."
                 },
                 cost_units=0,  # FREE - local generation
                 cost_details={
-                    "model": "ltx-2-19b-distilled-fp8",
+                    "model": "ltx-2.3-22b-distilled",
                     "resolution": result.get("resolution", "768x512"),
                     "duration_seconds": result.get("duration_seconds", 0),
                 }
