@@ -174,9 +174,16 @@ def _classify_file(filename: str) -> tuple[str, str]:
     return media_type, mime_type
 
 
-def _thumbnail_cache_key(tool_slug: str, filename: str) -> str:
-    """Generate a deterministic cache filename for a thumbnail."""
-    h = hashlib.sha256(f"{tool_slug}/{filename}".encode()).hexdigest()[:16]
+def _thumbnail_cache_key(tool_slug: str, filename: str, mtime: Optional[float] = None) -> str:
+    """Generate a deterministic cache filename for a thumbnail.
+    
+    Includes the source file's mtime so the cache is invalidated when
+    the source file is replaced (even with the same filename).
+    """
+    key = f"{tool_slug}/{filename}"
+    if mtime is not None:
+        key += f"/{mtime}"
+    h = hashlib.sha256(key.encode()).hexdigest()[:16]
     return f"{tool_slug}_{h}.jpg"
 
 
@@ -228,8 +235,8 @@ class MediaLibraryService:
                         media_type, mime_type = _classify_file(entry.name)
                         ext = Path(entry.name).suffix.lower()
 
-                        # Check thumbnail availability
-                        thumb_key = _thumbnail_cache_key(tool_slug, entry.name)
+                        # Check thumbnail availability (mtime-aware to invalidate stale cache)
+                        thumb_key = _thumbnail_cache_key(tool_slug, entry.name, stat.st_mtime)
                         has_thumb = (self.THUMBNAIL_CACHE_DIR / thumb_key).exists()
 
                         files.append({
@@ -349,8 +356,10 @@ class MediaLibraryService:
         return file_path
 
     def get_thumbnail_path(self, tool_slug: str, filename: str) -> Optional[Path]:
-        """Get cached thumbnail path, or None if not cached."""
-        thumb_key = _thumbnail_cache_key(tool_slug, filename)
+        """Get cached thumbnail path, or None if not cached / stale."""
+        source_path = self._tool_output_dir(tool_slug) / filename
+        mtime = source_path.stat().st_mtime if source_path.exists() else None
+        thumb_key = _thumbnail_cache_key(tool_slug, filename, mtime)
         thumb_path = self.THUMBNAIL_CACHE_DIR / thumb_key
         if thumb_path.exists():
             return thumb_path
@@ -358,7 +367,9 @@ class MediaLibraryService:
 
     def save_thumbnail(self, tool_slug: str, filename: str, data: bytes) -> Path:
         """Save thumbnail data to cache and return the path."""
-        thumb_key = _thumbnail_cache_key(tool_slug, filename)
+        source_path = self._tool_output_dir(tool_slug) / filename
+        mtime = source_path.stat().st_mtime if source_path.exists() else None
+        thumb_key = _thumbnail_cache_key(tool_slug, filename, mtime)
         thumb_path = self.THUMBNAIL_CACHE_DIR / thumb_key
         thumb_path.write_bytes(data)
         return thumb_path
